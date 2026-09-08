@@ -1,0 +1,25 @@
+# Binarios compilados
+bin/
+
+# Datasets generados (pesan GB)
+data/*.lmdb
+data/*.lmdb-lock
+data/*.manifest.json
+!data/.gitkeep
+
+# Artefactos de build
+*.o
+
+# Archivos temporales de LaTeX
+informe/*.aux
+informe/*.log
+informe/*.out
+informe/*.toc
+informe/*.fls
+informe/*.fdb_latexmk
+informe/*.synctex.gz
+
+# Archivos del sistema
+.DS_Store
+*~
+texput.log

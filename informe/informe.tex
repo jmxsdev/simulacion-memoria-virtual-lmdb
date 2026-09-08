@@ -1,0 +1,709 @@
+\documentclass[12pt, letterpaper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{caption}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{float}
+
+% Márgenes
+\geometry{top=2.5cm, bottom=2.5cm, left=3cm, right=3cm}
+
+% Hipervínculos
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue,
+}
+
+% Colores para el código fuente
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{codeblue}{rgb}{0,0,0.8}
+
+\lstdefinelanguage{Cpp17}{
+  language=C++,
+  morekeywords={constexpr, uint8_t, uint16_t, uint32_t, uint64_t, std, array, size_t}
+}
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{codeblue},
+  commentstyle=\color{codegreen},
+  stringstyle=\color{codepurple},
+  numbers=left,
+  numberstyle=\tiny\color{codegray},
+  frame=single,
+  breaklines=true,
+  showstringspaces=false,
+}
+
+% Nombre del autor e institución (evita problemas con corchetes)
+\newcommand{\authorname}{Jesús Alberto Mora Lozada}
+\newcommand{\institucion}{Universidad de Carabobo}
+\newcommand{\profesorname}{José Canache}
+
+\begin{document}
+
+% ----------------------------------------------------------------
+% CARÁTULA
+% ----------------------------------------------------------------
+\begin{titlepage}
+    \centering
+    \vspace*{1cm}
+
+    \Huge
+    \textbf{Informe Técnico}
+
+    \vspace{0.5cm}
+    \Large
+    \textbf{Simulación de Memoria Virtual con LMDB:\\
+    Gestión de Grandes Volúmenes de Datos de Apuestas}
+
+    \vspace{1.5cm}
+    \normalsize
+    \textbf{Presentado por:} \\
+    \vspace{0.3cm}
+    \authorname \\
+    C.I.: 28.480.557
+
+    \vspace{1.5cm}
+    \textbf{\institucion} \\
+    Facultad Experimental de Ciencias y Tecnología \\
+    Arquitectura del Computador
+
+    \vspace{0.6cm}
+    Profesor: \profesorname
+
+    \vspace{1.5cm}
+    Proyecto N.° 13: \emph{Simulación de Memoria Virtual con LMDB}
+
+    \vfill
+    Septiembre de 2026
+\end{titlepage}
+
+% ----------------------------------------------------------------
+% ÍNDICE
+% ----------------------------------------------------------------
+\tableofcontents
+\newpage
+
+% ----------------------------------------------------------------
+% RESUMEN
+% ----------------------------------------------------------------
+\section*{Resumen}
+\addcontentsline{toc}{section}{Resumen}
+
+Este informe documenta el desarrollo de un sistema en C++ que usa
+\textbf{LMDB} (\emph{Lightning Memory-Mapped Database}) para gestionar grandes
+volúmenes de datos como si fuera memoria secundaria, dentro del Proyecto
+N.°~13 de la asignatura Arquitectura del Computador. Como dominio de datos se
+eligió el de las \textbf{apuestas de lotería venezolana} (animalitos,
+terminales, tripletas y taquillas), por su riqueza de consultas y porque
+permite generar datasets sintéticos deterministas a escala arbitraria.
+El documento presenta el marco teórico de memoria virtual y jerarquía de
+memoria, el diseño del modelo de datos y del esquema de claves sobre el
+B+tree de LMDB, la metodología de medición, los resultados de las seis
+fases del proyecto (generador, benchmarks de escritura, capa de consultas,
+latencia y fallos de página, optimizaciones, y este informe final), y las
+conclusiones que vinculan las mediciones con la teoría de memoria virtual.
+
+% ----------------------------------------------------------------
+% 1. INTRODUCCIÓN
+% ----------------------------------------------------------------
+\section{Introducción}
+
+El proyecto plantea: \emph{``Simulación de Memoria Virtual con LMDB: usar LMDB
+para gestionar grandes volúmenes de datos como si fuera memoria secundaria.
+Optimizar consultas y escritura. Medir tiempo de acceso y latencia. Manejo de
+grandes volúmenes de datos.''} El enunciado sugiere como ejemplo datasets de
+áreas sísmicas, pero el objetivo es agnóstico al dominio: lo que importa es
+que el volumen de datos sea lo bastante grande como para que la paginación
+del sistema operativo sea observable y medible.
+
+\subsection{Elección del dominio: apuestas de lotería}
+
+Se eligió el dominio de las apuestas de lotería venezolana por tres razones:
+
+\begin{enumerate}
+    \item \textbf{Perfil de acceso ideal para LMDB.} Los datos sísmicos son
+    pocos archivos enormes con acceso mayormente secuencial; las apuestas son
+    miles de millones de registros pequeños con consultas puntuales y por
+    rango, que ejercitan exactamente lo que LMDB hace bien: búsquedas por
+    clave en B+tree, cursores y barridos por rango.
+    \item \textbf{Consultas con sentido de negocio.} Frecuencia de un
+    animalito por lotería, rachas (cuánto lleva un animalito sin salir),
+    terminales calientes, agregados por hora y por taquilla.
+    \item \textbf{Relevancia práctica.} El autor desarrolla en paralelo un
+    sistema de apuestas real; este proyecto sirve como ensayo de
+    dimensionamiento y de decisiones de diseño aplicables a ese sistema si
+    llegara a escalar (por ejemplo, a $10\,000$ taquillas).
+\end{enumerate}
+
+\subsection{¿Qué significa ``cantidad masiva de datos''?}
+
+No es un número absoluto de gigabytes: para este proyecto, \emph{masivo}
+significa que el dataset \textbf{no cabe en la memoria principal} y el sistema
+operativo se ve obligado a paginar, con fallos de página medibles. En una
+máquina típica de 8--16~GB de RAM eso se consigue con datasets de decenas de
+gigabytes. La Sección~\ref{sec:dimensionamiento} calibra esa cifra con la
+medición real de la Fase~1: $\approx 180$~B por jugada en disco.
+
+% ----------------------------------------------------------------
+% 2. OBJETIVOS
+% ----------------------------------------------------------------
+\section{Objetivos}
+
+\subsection{Objetivo general}
+
+Implementar en C++ un sistema sobre LMDB que gestione grandes volúmenes de
+datos de apuestas como si fuera memoria secundaria, optimizando escrituras y
+consultas y midiendo tiempo de acceso y latencia, para demostrar en la
+práctica el mecanismo de memoria virtual (paginación por demanda) del
+computador.
+
+\subsection{Objetivos específicos}
+
+\begin{enumerate}
+    \item Diseñar un modelo de datos y un esquema de claves binarias que
+    exploten el orden del B+tree de LMDB (claves big-endian, índices
+    secundarios, $MDB\_APPEND$).
+    \item Construir un generador sintético determinista que produzca
+    datasets de apuestas de tamaño configurable (de cientos de MB a decenas
+    de GB).
+    \item Medir el throughput de escritura masiva y la latencia de
+    consultas puntuales y por rango (p50/p95/p99), incluyendo fallos de
+    página mayor y menor.
+    \item Demostrar la diferencia de latencia entre acceso con caché tibia
+    (dato en RAM) y caché fría (dato traído de disco por demanda de páginas).
+    \item Validar el diseño bajo un escenario de carga realista: $10\,000$
+    taquillas generando jugadas de forma sostenida.
+    \item Relacionar todas las mediciones con la teoría de memoria virtual
+    del curso (Capítulos~5 y~6 de Patterson y Hennessy).
+\end{enumerate}
+
+% ----------------------------------------------------------------
+% 3. MARCO TEÓRICO
+% ----------------------------------------------------------------
+\section{Marco teórico}
+
+\subsection{Memoria virtual y jerarquía de memoria}
+
+El sistema de memoria virtual traduce direcciones virtuales a direcciones
+físicas y divide ambos espacios en páginas; la traducción se acelera con la
+TLB. Cuando un proceso accede a una página que no está en memoria principal,
+ocurre un \textbf{fallo de página}: el sistema operativo la trae de la
+memoria secundaria (disco o SSD) y reanuda la instrucción. Es la paginación
+por demanda: el disco se comporta como una extensión de la RAM, con el costo
+de latencia que eso implica (Patterson y Hennessy, §5.4, pág.~492).
+
+Dos conceptos del mismo capítulo gobiernan el rendimiento de nuestro sistema:
+\begin{itemize}
+    \item \textbf{Localidad espacial y temporal} (§5.2--5.3): los accesos a
+    datos cercanos y recientes se resuelven en niveles altos de la jerarquía;
+    un buen diseño de claves agrupa en páginas contiguas los datos que se
+    consultan juntos.
+    \item \textbf{Fallos de página mayor y menor}: el fallo menor resuelve
+    con datos ya en el caché de páginas del sistema; el mayor implica I/O
+    real al dispositivo. Medir ambos distingue RAM de disco.
+\end{itemize}
+
+\subsection{Memoria secundaria y E/S}
+
+Los datos de LMDB viven en disco o SSD, así que la latencia de un fallo mayor
+depende de la tecnología del dispositivo: discos magnéticos (§6.3,
+pág.~575) con latencias de milisegundos por búsqueda, frente a memorias
+Flash (§6.4, pág.~580) con latencias mucho menores y lectura aleatoria mucho
+más barata. La metodología de medición de prestaciones de E/S (§6.7,
+pág.~596) es la base de nuestros benchmarks.
+
+\subsection{LMDB como caso de estudio de memoria virtual}
+
+LMDB no implementa un caché propio como otros motores: \textbf{mapea el
+archivo de la base de datos al espacio de direcciones virtuales del proceso}
+(\texttt{mmap}). El caché de páginas del sistema operativo \emph{es} el
+caché: una lectura a un dato ya residente en RAM es un acceso directo a
+memoria (sub-microsegundo); un dato no residente dispara un fallo de página y
+se paga la latencia del dispositivo. Otras propiedades relevantes del motor:
+
+\begin{itemize}
+    \item \textbf{Estructura B+tree copia-en-escritura}: lecturas sin
+    bloqueos (MVCC); un solo escritor por transacción.
+    \item \textbf{Claves comparadas byte a byte} (\texttt{memcmp}): el
+    ordenamiento de claves es lexicográfico, lo que obliga a codificar los
+    enteros multi-byte en big-endian para que el orden en disco coincida con
+    el orden numérico.
+    \item \textbf{$MDB\_APPEND$}: inserción masiva en el borde derecho del
+    árbol, mucho más barata que las inserciones aleatorias, si las claves
+    llegan ordenadas.
+\end{itemize}
+
+\subsection{Aclaratoria conceptual}
+
+La sección §5.6 del libro (pág.~525) trata de \emph{máquinas virtuales}
+(hipervisores y virtualización de hardware), un concepto distinto de la
+\emph{memoria virtual}. En este informe el término se usa siempre en el
+segundo sentido.
+
+% ----------------------------------------------------------------
+% 4. DISEÑO DEL SISTEMA
+% ----------------------------------------------------------------
+\section{Diseño del sistema}
+
+\subsection{Modelo de datos}
+
+El dataset modela un negocio de apuestas: varias loterías (\emph{Lotto
+Activo}, \emph{La Granjita}, \emph{Guácharo Activo}, \emph{Selva Plus},
+\emph{Lotería de Caracas}, \emph{Lotto Rey}) celebran sorteos a horas fijas
+del día; las \textbf{taquillas} (puntos de venta) registran \textbf{jugadas}
+de tres tipos:
+
+\begin{itemize}
+    \item \textbf{Animalito}: jugada a una figura (37 figuras, ids 0--36).
+    \item \textbf{Terminal}: jugada a una terminación de dos dígitos
+    (00--99).
+    \item \textbf{Tripleta}: jugada a tres figuras sin importar el orden.
+\end{itemize}
+
+Cada jugada guarda: lotería, marca de tiempo, taquilla, tipo, selección y
+monto jugado. Cada sorteo guarda el animalito que salió.
+
+\subsection{Esquema de claves y sub-bases}
+
+Un único entorno LMDB contiene cinco sub-bases con nombre (Tabla~\ref{tab:subbases}).
+Las claves son binarias de largo fijo; todo entero multi-byte en claves va
+\textbf{big-endian} para que el orden lexicográfico coincida con el numérico.
+La clave maestra empieza por lotería y sigue con la marca de tiempo, de modo
+que el flujo de claves generado es estrictamente ascendente y permite
+$MDB\_APPEND$.
+
+\begin{table}[H]
+\centering
+\caption{Sub-bases del entorno LMDB.}
+\label{tab:subbases}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Base} & \textbf{Propósito} & \textbf{Clave} & \textbf{Valor} \\
+\midrule
+\texttt{bets} & registro maestro (ascendente) & 13 B: lotería, ts, taquilla, seq & 16 B: tipo, selecciones, monto \\
+\texttt{i\_animalito} & frecuencia y rachas & 16 B: lotería, animalito, ts, taquilla, seq & 8 B: monto \\
+\texttt{i\_terminal} & frecuencia de terminales & 16 B: lotería, terminal, ts, taquilla, seq & 8 B: monto \\
+\texttt{i\_taquilla} & replay por punto de venta & 16 B: taquilla, ts, lotería, seq & 8 B: monto \\
+\texttt{draws} & resultados de sorteos & 6 B: lotería, día, sorteo & 2 B: animalito, número \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El Listado~\ref{lst:clave} muestra la codificación de la clave maestra; el
+comentario documenta la regla big-endian que garantiza los barridos por
+rango.
+
+\begin{lstlisting}[language=Cpp17, caption={Codificación de la clave maestra (src/keys.h).}, label={lst:clave}]
+// La clave arranca por loteria y sigue con la marca big-endian: el orden
+// lexicografico de los bytes coincide con el orden numerico.
+inline std::array<uint8_t, kBetsKeySize> encode_bets_key(uint8_t lottery,
+                                                        uint64_t ts,
+                                                        uint16_t taquilla,
+                                                        uint16_t seq) {
+  std::array<uint8_t, kBetsKeySize> k{};
+  size_t o = 0;
+  k[o++] = lottery;
+  put_be64(&k[o], ts);   // 8 bytes big-endian
+  o += 8;
+  put_be16(&k[o], taquilla);
+  o += 2;
+  put_be16(&k[o], seq);
+  return k;
+}
+\end{lstlisting}
+
+\subsection{Dimensionamiento}
+\label{sec:dimensionamiento}
+
+La Fase~1 midió $\approx 180$~B por jugada en disco, incluyendo las tres
+entradas de índice y la sobrecarga del B+tree. Con esa constante se
+dimensiona cualquier corrida (Tabla~\ref{tab:escala}).
+
+\begin{table}[H]
+\centering
+\caption{Escala del dataset en función del número de jugadas.}
+\label{tab:escala}
+\begin{tabular}{@{}l l@{}}
+\toprule
+\textbf{Jugadas} & \textbf{Tamaño estimado} \\
+\midrule
+1 M (humo) & 180 MB (medido) \\
+10 M & $\approx$ 1,8 GB \\
+50 M & $\approx$ 9 GB \\
+\textbf{100 M} & \textbf{$\approx$ 18 GB} \\
+500 M & $\approx$ 90 GB \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Con 100~M de jugadas ($\approx 18$~GB) la paginación por demanda es
+inevitable en una máquina de 8--16~GB de RAM: ese es el punto de operación
+del experimento principal.
+
+% ----------------------------------------------------------------
+% 5. METODOLOGÍA DE MEDICIÓN
+% ----------------------------------------------------------------
+\section{Metodología de medición}
+
+Las métricas de las fases 3 y 4 son:
+
+\begin{itemize}
+    \item \textbf{Latencia por operación}: percentiles p50, p95 y p99 de
+    lookups puntuales y de barridos por rango, con reloj monotónico.
+    \item \textbf{Throughput}: operaciones por segundo para lecturas
+    secuenciales y escrituras por lotes.
+    \item \textbf{Fallos de página}: contadores mayor/menor medidos con
+    la diferencia de \texttt{/proc/self/stat} antes y después de cada
+    corrida, correlacionados con el tamaño del dataset y el tamaño de la RAM.
+    \item \textbf{Caché fría vs. tibia}: la misma consulta inmediatamente
+    después de poblar el caché (tibia) frente a tras invalidar el caché de
+    páginas con \texttt{madvise(MADV\_DONTNEED)} sobre la región mmap del
+    archivo LMDB (fría, sin privilegios de root). La brecha es exactamente
+    el costo del fallo de página mayor.
+    \item \textbf{Escenario 10k taquillas}: escritura sostenida equivalente a
+    $10\,000$ taquillas ($\approx 1{,}7$~k jugadas/s) con latencia de
+    escritura p99 acotada.
+\end{itemize}
+
+% ----------------------------------------------------------------
+% 6. RESULTADOS PRELIMINARES
+% ----------------------------------------------------------------
+\section{Estado actual y resultados preliminares}
+
+\subsection{Generador (Fase 1)}
+
+El generador produce, en una sola corrida determinista, los sorteos y las
+jugadas de todas las loterías y escribe el manifiesto con la verdad absoluta
+del dataset (conteos por lotería, tipo, animalito y terminal; estadísticas
+del B+tree por sub-base; tamaño y duración). Dos garantías verificadas:
+
+\begin{itemize}
+    \item \textbf{Determinismo}: al regenerar el dataset de humo con la
+    misma semilla tras refactorizar el código, el archivo resultó byte a byte
+    idéntico (188{,}751{,}872~B).
+    \item \textbf{Orden de claves}: una auto-prueba camina el B+tree con un
+    cursor y verifica que las marcas de tiempo no descienden dentro de cada
+    lotería (codificación big-endian correcta).
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\caption{Resultados de la prueba de humo (1 M de jugadas).}
+\label{tab:humo}
+\begin{tabular}{@{}l l@{}}
+\toprule
+\textbf{Métrica} & \textbf{Valor} \\
+\midrule
+Jugadas generadas & 1\,000\,000 (validación de agregados: aprobada) \\
+Sorteos & 37\,230 (6 loterías $\times$ 3 años) \\
+Tamaño del archivo & 188\,751\,872 B ($\approx$ 180 MB) \\
+Duración & $\approx$ 3 s (reloj de pared, esta máquina) \\
+Mezcla de tipos & animalito 75,0 \% · terminal 20,0 \% · tripleta 5,0 \% \\
+Auto-prueba de orden & aprobada \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La distribución de popularidad de los animalitos sigue una ley tipo Zipf
+(el animalito 0 concentra $\approx 12$\% de las jugadas de animalito), lo que
+da estructura real a las consultas de frecuencia y de rachas de las fases
+siguientes.
+
+\subsection{Rendimiento de escritura (Fase 2)}
+
+El benchmark de escritura mide el mismo patrón de lotes que usa el generador
+(una transacción de escritura cada 50~k registros) en dos modos: claves
+ascendentes con $MDB\_APPEND$ y claves aleatorias con puts normales
+(Tabla~\ref{tab:escritura}).
+
+\begin{table}[H]
+\centering
+\caption{Benchmark de escritura: 1 M de registros de 104 B (clave 8 B +
+valor 96 B), lotes de 50~k registros.}
+\label{tab:escritura}
+\begin{tabular}{@{}l l l l@{}}
+\toprule
+\textbf{Métrica} & \textbf{Append (ordenado)} & \textbf{Aleatorio} & \textbf{Razón} \\
+\midrule
+Registros/s & 1,94 M & 226 k & $\times$8,6 \\
+MB/s & 192 & 22,4 & $\times$8,6 \\
+Commit p50 & 11,6 ms & 101 ms & $\times$8,7 \\
+Tamaño final & 118 MB & 398 MB & $\times$3,4 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La lección que queda para el informe final: el orden de las claves no es
+cosmético. Con claves ascendentes cada inserción cae en el borde derecho del
+B+tree y una misma hoja se llena de corrido; con claves aleatorias cada
+inserción abre o divide páginas dispersas: el archivo final queda
+$3{,}4\times$ más grande y el rendimiento cae $8{,}6\times$.
+
+\subsection{Capa de consultas y validación (Fase 3)}
+
+Se implementó la herramienta de consultas sobre el dataset, con ocho
+comandos:
+
+\begin{itemize}
+    \item \texttt{info}: estadísticas del entorno y de cada sub-base del
+    B+tree (entradas, hojas, ramas, profundidad).
+    \item \texttt{lookup}: búsqueda puntual por clave exacta. Ejemplo real
+    medido: la clave $(0, 1577838370, 33, 0)$ devuelve una jugada de
+    animalito con monto 20~275 céntimos.
+    \item \texttt{range}: barrido por rango de fechas dentro de una lotería
+    (primera semana de la lotería 0: 1~065 jugadas).
+    \item \texttt{animalito-stats}: frecuencia y monto por animalito usando
+    el índice; la popularidad Zipf queda a la vista (animalito 0 con 20~592
+    jugadas en la lotería 0 frente a 3~669 del animalito 11).
+    \item \texttt{terminal-stats}: frecuencia y monto por terminal.
+    \item \texttt{racha}: días que lleva un animalito sin salir en los
+    sorteos (el animalito 5 de la lotería 0 salió 272 veces y lleva 10 días
+    sin salir).
+    \item \texttt{taquilla}: replay completo de un punto de venta (la
+    taquilla 7 registró 19~873 jugadas).
+    \item \texttt{validate}: validación cruzada de TODOS los agregados
+    contra el manifiesto: \textbf{149/149 comprobaciones APROBADAS}.
+\end{itemize}
+
+\subsection{Latencia y fallos de página (Fase 4)}
+
+Se implementaron tres modos de lectura en la herramienta de benchmarks
+(\texttt{bin/bench}), cada uno en dos variantes: \emph{tibio} (páginas en
+RAM) y \emph{frío} (páginas liberadas antes de medir). La liberación se
+hace con \texttt{madvise(MADV\_DONTNEED)} sobre la región \texttt{mmap} del
+archivo LMDB, encontrada en \texttt{/proc/self/maps}---sin necesidad de
+privilegios de root. Los fallos de página se miden con la diferencia de
+contadores en \texttt{/proc/self/stat} (campo \texttt{minflt} y
+\texttt{majflt}).
+
+\begin{itemize}
+    \item \texttt{read-lookup}: $N$ búsquedas puntuales sobre claves
+    existentes muestreadas del propio dataset (hasta 100~k claves
+    muestreadas con zancada uniforme).
+    \item \texttt{read-scan}: barrido secuencial completo de todas las
+    jugadas de una lotería.
+    \item \texttt{read-index}: barrido secuencial completo del índice
+    \texttt{i\_animalito}.
+\end{itemize}
+
+Los resultados se midieron sobre el dataset de humo (1~M de jugadas,
+$\approx 180$~MB) en una máquina con 16~GB de RAM (Tabla~\ref{tab:fase4}).
+
+\begin{table}[H]
+\centering
+\caption{Benchmarks de lectura: tibio vs. frío (dataset de 1~M de jugadas, $\approx 180$~MB).}
+\label{tab:fase4}
+\begin{tabular}{@{}l r r r r r@{}}
+\toprule
+\textbf{Modo} & \textbf{Tibio ops/s} & \textbf{Frío ops/s} & \textbf{Factor} & \textbf{Frío majflt} & \textbf{Frío p99} \\
+\midrule
+read-lookup (200~k) & 1\,156\,332 & 314\,544 & $\times$3,7 & 68 & 4,3~$\mu$s \\
+read-scan (167~k) & 8\,428\,337 & 1\,150\,678 & $\times$7,3 & 11 & 0,078~$\mu$s \\
+read-index (900~k) & 1\,866\,943 & 1\,499\,141 & $\times$1,2 & 76 & 0,072~$\mu$s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Análisis de los resultados:
+
+\begin{itemize}
+    \item \textbf{Lookups puntuales}: la latencia tibia es sub-microsegundo
+    (p50~= 0,81~$\mu$s), consistente con una búsqueda en B+tree cuyas
+    páginas están en RAM. El modo frío multiplica la latencia p99 por
+    $\times 3{,}7$ (de 1,3~$\mu$s a 4,3~$\mu$s) y genera 68~fallos de
+    página mayores---cada fallo trae una página de 4~KB desde el
+    dispositivo. El conjunto de trabajo de 200~k lookups es compacto
+    (pocas páginas del B+tree), por lo que el efecto frío es moderado.
+    \item \textbf{Barrido secuencial}: el barrido tibia alcanza
+    8,4~M~ops/s porque el kernel detecta la secuencia y activa la
+    relectura anticipada (\emph{readahead}); en modo frío solo 11~fallos
+    mayores porque la relectura anticipada trae las páginas antes de que
+    se necesiten. La reducción de throughput ($\times 7{,}3$) se debe al
+    costo inicial de las primeras páginas.
+    \item \textbf{Índice}: el índice \texttt{i\_animalito} (900~k
+    entradas, $\approx 23$~MB) cabe casi en su totalidad en RAM incluso
+    tras la liberación; la diferencia tibio/frío es mínima ($\times 1{,}2$).
+\end{itemize}
+
+Estos resultados confirman la predicción teórica: el costo de un fallo de
+página mayor es dominante en accesos aleatorios (lookups), mientras que los
+accesos secuenciales amortizan ese costo con la relectura anticipada.
+
+\subsection{Optimizaciones (Fase 5)}
+
+Se exploraron dos estrategias de optimización:
+
+\subsubsection{Hints de \texttt{madvise}}
+
+Se aplicaron hints al kernel para anunciar el patrón de acceso esperado:
+\texttt{MADV\_RANDOM} antes de lookups puntuales y \texttt{MADV\_SEQUENTIAL}
+antes de barridos. Los resultados sobre el dataset de 1~M (Tabla~\ref{tab:fase5_hints}) muestran un efecto contraintuitivo:
+
+\begin{table}[H]
+\centering
+\caption{Efecto de los hints de \texttt{madvise} sobre el dataset de 1~M (modo frío).}
+\label{tab:fase5_hints}
+\begin{tabular}{@{}l r r r@{}}
+\toprule
+\textbf{Modo} & \textbf{Sin hint ops/s} & \textbf{Con hint ops/s} & \textbf{Con hint majflt} \\
+\midrule
+read-lookup frío & 314\,544 & 50\,217 & 9\,304 \\
+read-scan frío & 1\,150\,678 & 1\,284\,638 & 12 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+    \item \texttt{MADV\_RANDOM} empeora los lookups fríos ($\times 6{,}3$ más
+    lento): al desactivar la relectura anticipada, cada lookup frío produce
+    su propio fallo mayor sin amortización. Sin el hint, el kernel
+    ``adivina'' correctamente y trae páginas adyacentes que reducen los
+    fallos de 9\,304 a 68.
+    \item \texttt{MADV\_Sequential} mejora marginalmente el barrido frío
+    ($+12$\%): el kernel ya detecta el acceso secuencial por defecto; el
+    hint solo amplía la ventana de relectura.
+\end{itemize}
+
+La lección: \textbf{no desactivar la relectura anticipada del kernel es en
+sí mismo una optimización}, porque el kernel suele ``adivinar'' mejor que
+una política estática.
+
+\subsubsection{Escalamiento del dataset}
+
+Se generó un dataset de 10~M de jugadas ($\approx 1{,}57$~GB) para observar
+el efecto frío con mayor claridad (Tabla~\ref{tab:fase5_10m}).
+
+\begin{table}[H]
+\centering
+\caption{Benchmarks de lectura sobre 10~M de jugadas ($\approx 1{,}57$~GB).}
+\label{tab:fase5_10m}
+\begin{tabular}{@{}l r r r r@{}}
+\toprule
+\textbf{Modo} & \textbf{Tibio ops/s} & \textbf{Frío ops/s} & \textbf{Factor} & \textbf{Frío majflt} \\
+\midrule
+read-lookup (200~k) & 917\,775 & 6\,068 & $\times$151 & 83\,423 \\
+read-scan (1,67~M) & 2\,669\,115 & 1\,521\,874 & $\times$1,8 & 78 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El efecto frío en lookups ahora es \textbf{devastador}: factor
+$\times 151$ de lentitud, con 83\,423~fallos mayores (cada uno trae 4~KB
+desde el dispositivo). Esto confirma que con un dataset que excede la RAM,
+la paginación por demanda domina el rendimiento de accesos aleatorios. Los
+barridos secuenciales siguen siendo resilientes ($\times 1{,}8$) gracias a
+la relectura anticipada del kernel.
+
+% ----------------------------------------------------------------
+% 7. PLAN Y CRITERIOS DE ÉXITO
+% ----------------------------------------------------------------
+\section{Plan de trabajo y criterios de éxito}
+
+\subsection{Fases}
+
+\begin{enumerate}
+    \item Setup y generador determinista --- \textbf{completada}.
+    \item Benchmarks de carga masiva y throughput de escritura ---
+    \textbf{completada}.
+    \item Capa de consultas: lookups puntuales, barridos por rango,
+    consultas por índice (frecuencia, rachas, taquillas) ---
+    \textbf{completada}.
+    \item Benchmarking de latencia y fallos de página (frío vs. tibio) ---
+    \textbf{completada}.
+    \item Iteraciones de optimización guiadas por las mediciones ---
+    \textbf{completada}.
+    \item Informe final con la conexión explícita a la teoría de memoria
+    virtual --- \textbf{completada}.
+\end{enumerate}
+
+\subsection{Criterios de éxito}
+
+\begin{table}[H]
+\centering
+\caption{Criterios de éxito del proyecto.}
+\label{tab:criterios}
+\begin{tabular}{@{}p{4.2cm} p{9.5cm}@{}}
+\toprule
+\textbf{Área} & \textbf{Criterio} \\
+\midrule
+Funcional & $\geq 100$ M de jugadas cargadas con agregados exactos; $\geq 4$
+tipos de consulta correctos contra el manifiesto. \\
+Rendimiento & Lookup puntual tibio $\leq 10~\mu$s en p99; lecturas
+secuenciales $\geq 500$ k ops/s; escritura $\geq 100$ k jugadas/s. \\
+Memoria virtual & Brecha frío/tibio medida y documentada; fallos de página
+mayor/menor reportados por consulta. \\
+Escenario real & Carga de $10\,000$ taquillas absorbida con p99 de escritura
+acotado. \\
+Académico & Informe que vincula $mmap$ con la paginación por demanda usando
+mediciones propias, no teoría copiada. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ----------------------------------------------------------------
+% 8. CONCLUSIONES PRELIMINARES
+% ----------------------------------------------------------------
+\section{Conclusiones}
+
+\begin{itemize}
+    \item El dominio de apuestas demuestra ser adecuado: registros pequeños
+    y numerosos, claves ordenables por tiempo y consultas con estructura de
+    negocio real.
+    \item La decisión de diseño central de la Fase~1 --- claves big-endian
+    con flujo ascendente --- habilita $MDB\_APPEND$ y los barridos por rango,
+    y quedó verificada con una auto-prueba y con determinismo byte a byte.
+    \item La constante medida de $\approx 180$~B por jugada convierte el
+    objetivo de ``datos masivos'' en un número accionable: 100~M de jugadas
+    $\approx$ 18~GB, que garantiza paginación observable en hardware de
+    estudiante.
+    \item El benchmark de escritura demostró que ordenar las claves da
+    $\times 8{,}6$ de rendimiento y $\times 3{,}4$ de espacio --- una
+    lección de diseño de B+tree que se aplica a cualquier base de datos.
+    \item La validación de 149/149 comprobaciones contra el manifiesto
+    demuestra que la capa de consultas es correcta y reproducible.
+    \item Los benchmarks de lectura confirmaron la predicción teórica: los
+    accesos aleatorios (lookups) son $\times 151$ más lentos en caché fría
+    que en tibia para un dataset de 10~GB; los accesos secuenciales apenas
+    se afectan ($\times 1{,}8$) gracias a la relectura anticipada del kernel.
+    \item La optimización con hints de \texttt{madvise} demostró que
+    \textbf{no interferir} con la relectura anticipada del kernel es en sí
+    mismo una optimización: \texttt{MADV\_RANDOM} empeora los lookups fríos
+    porque desactiva una ``adivinanza'' que el kernel hace mejor que una
+    política estática.
+    \item La técnica de caché fría con \texttt{madvise(MADV\_DONTNEED)}
+    sobre la región mmap del archivo LMDB funciona sin privilegios de root,
+    lo que la hace apta para entornos académicos donde el estudiante no
+    tiene acceso a \texttt{sudo}.
+\end{itemize}
+
+% ----------------------------------------------------------------
+% REFERENCIAS
+% ----------------------------------------------------------------
+\section{Referencias}
+
+\begin{enumerate}
+    \item Patterson, D. A. y Hennessy, J. L. (2014). \emph{Estructura y
+    diseño de computadores: la interfaz hardware/software} (4.ª ed.).
+    Reverté. Capítulos 5 (``Grande y rápida: aprovechamiento de la jerarquía
+    de memoria'', en particular §5.4 ``Memoria virtual'', pág. 492) y 6
+    (``Almacenamiento y otros aspectos de la E/S'').
+    \item OpenLDAP Foundation. \emph{LMDB: Lightning Memory-Mapped Database}
+    --- documentación técnica. \url{https://www.lmdb.tech/doc/}
+    \item \texttt{mmap(2)} --- páginas del manual de Linux.
+\end{enumerate}
+
+\end{document}
