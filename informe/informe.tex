@@ -582,6 +582,40 @@ La lección: \textbf{no desactivar la relectura anticipada del kernel es en
 sí mismo una optimización}, porque el kernel suele ``adivinar'' mejor que
 una política estática.
 
+\subsubsection{Escritura concurrente: el caso de las taquillas}
+
+Se implementó un benchmark que simula $N$ taquillas escribiendo en paralelo
+sobre un mismo entorno LMDB. LMDB solo permite \textbf{un escritor a la
+vez} (su constraint fundamental); todos los hilos comparten un mutex que
+serializa las transacciones de escritura. El benchmark mide cuánto se
+degrada el rendimiento con $N$ taquillas compitiendo por el escritor
+(Tabla~\ref{tab:fase5_concurrente}).
+
+\begin{table}[H]
+\centering
+\caption{Escritura concurrente: $500\,000$ registros por taquilla, lotes de $50\,000$.}
+\label{tab:fase5_concurrente}
+\begin{tabular}{@{}r r r r r@{}}
+\toprule
+\textbf{Taquillas} & \textbf{Total} & \textbf{Throughput} & \textbf{Commit p50} & \textbf{Degradación} \\
+\midrule
+1 & 500\,000 & 1\,342\,000 reg/s & 11,2 ms & --- \\
+4 & 2\,000\,000 & 1\,104\,000 reg/s & 21,8 ms & $\times 0{,}82$ \\
+8 & 4\,000\,000 & 1\,004\,000 reg/s & 24,3 ms & $\times 0{,}75$ \\
+16 & 8\,000\,000 & 943\,000 reg/s & 26,3 ms & $\times 0{,}70$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El throughput cae $\times 0{,}70$ al pasar de 1 a 16~taquillas, y el commit
+p50 se duplica (de 11,2~ms a 26,3~ms). Esto confirma que el cuello de
+botella de LMDB bajo carga concurrente es el \textbf{escritor único}: cada
+taquilla debe esperar a que la anterior termine su transacción. En un
+sistema real con $10\,000$~taquillas, la solución es partitionar los datos
+(por rango de tiempo o por taquilla) en múltiples entornos LMDB, o usar un
+proceso recolector que agrupe las escrituras de múltiples taquillas en
+lotes grandes antes de persistir.
+
 \subsubsection{Escalamiento del dataset}
 
 Se generó un dataset de 10~M de jugadas ($\approx 1{,}57$~GB) para observar

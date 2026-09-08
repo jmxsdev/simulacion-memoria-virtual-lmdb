@@ -42,7 +42,7 @@ make clean      # borra solo los binarios — jamás los datasets
 | Herramienta | Fase | Qué hace |
 | --- | --- | --- |
 | `bin/generator` | 1 | genera el dataset determinista (`--bets`, `--years`, `--taquillas`, `--seed`...) |
-| `bin/bench` | 2, 4 | benchmarks de escritura y lectura (escritura: `write-append`/`write-random`; lectura: `read-lookup`/`read-scan`/`read-index` con `--cold`) |
+| `bin/bench` | 2, 4, 5 | benchmarks de escritura, lectura y escritura concurrente |
 | `bin/query` | 3 | consultas de solo lectura y validación contra el manifiesto |
 
 Ejemplos:
@@ -72,6 +72,12 @@ Ejemplos:
 # Benchmark de lectura: barrido del índice i_animalito
 ./bin/bench read-index --db data/smoke.lmdb                      # tibio
 ./bin/bench read-index --db data/smoke.lmdb --cold               # frío
+
+# Benchmark de escritura concurrente: simula N taquillas
+./bin/bench write-concurrent --taquillas 1 --records 500000 --out data/bench_1t.lmdb --force
+./bin/bench write-concurrent --taquillas 4 --records 500000 --out data/bench_4t.lmdb --force
+./bin/bench write-concurrent --taquillas 8 --records 500000 --out data/bench_8t.lmdb --force
+./bin/bench write-concurrent --taquillas 16 --records 500000 --out data/bench_16t.lmdb --force
 ```
 
 ### Resultados medidos (Fase 2)
@@ -99,6 +105,21 @@ Lecturas sobre el dataset de 1M de jugadas ($\approx 180$ MB):
 Caché fría liberada con `madvise(MADV_DONTNEED)` sobre la región mmap del
 archivo LMDB (sin privilegios de root). Fallos de página medidos con
 `/proc/self/stat`.
+
+### Resultados medidos (Fase 5: escritura concurrente)
+
+500K registros por taquilla, lotes de 50K:
+
+| Taquillas | Total | Throughput | Commit p50 | Degradación |
+| --- | --- | --- | --- | --- |
+| 1 | 500K | 1.342.000 reg/s | 11,2 ms | — |
+| 4 | 2M | 1.104.000 reg/s | 21,8 ms | ×0,82 |
+| 8 | 4M | 1.004.000 reg/s | 24,3 ms | ×0,75 |
+| 16 | 8M | 943.000 reg/s | 26,3 ms | ×0,70 |
+
+LMDB solo permite un escritor a la vez: con 16 taquillas el throughput cae
+30% y el commit p50 se duplica. La solución en producción: partitionar o
+agrupar escrituras.
 
 ## Parámetros del generador
 

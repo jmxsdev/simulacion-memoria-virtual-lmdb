@@ -30,15 +30,18 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "env.h"
@@ -156,6 +159,177 @@ void run_write_bench(const std::string& out, uint64_t records, uint64_t batch,
   std::cout << "bytes_en_archivo=" << file_bytes << "\n";
 
   mdb_dbi_close(env, dbi);
+  mdb_env_close(env);
+}
+
+// ---------------------------------------------------------------------------
+// Escritura concurrente: simula N taquillas escribiendo en paralelo.
+// ---------------------------------------------------------------------------
+
+/// @brief Resultado individual de un hilo taquilla.
+struct TaquillaResult {
+  uint64_t registros = 0;
+  double duracion_ms = 0;
+  double commit_p50_ms = 0;
+  double commit_p95_ms = 0;
+};
+
+/// @brief Hilo que simula una taquilla escribiendo jugadas.
+///
+/// Cada taquilla genera `registros` jugadas con su propio ID, en lotes de
+/// `batch` registros. LMDB solo permite un escritor a la vez, así que todos
+/// los hilos comparten un mutex — el benchmark mide cuánto se degrada el
+/// rendimiento con N taquillas compitiendo por el escritor.
+///
+/// @param[in]  env      Entorno LMDB compartido.
+/// @param[in]  taquilla_id ID de la taquilla (0..N-1).
+/// @param[in]  registros Total de registros a escribir.
+/// @param[in]  batch    Registros por transacción.
+/// @param[in]  seed     Semilla base (se mezcla con taquilla_id).
+/// @param[in]  mtx      Mutex compartido para serializar escrituras.
+/// @param[out] result   Resultado de esta taquilla.
+void taquilla_writer(MDB_env* env, uint16_t taquilla_id, uint64_t registros,
+                     uint64_t batch, uint64_t seed, std::mutex& mtx,
+                     TaquillaResult& result) {
+  SplitMix64 rng(seed + taquilla_id);
+  std::vector<double> commit_ms;
+  commit_ms.reserve((registros + batch - 1) / batch);
+
+  auto t0 = std::chrono::steady_clock::now();
+  uint64_t escritos = 0;
+
+  while (escritos < registros) {
+    std::lock_guard<std::mutex> lock(mtx);
+
+    MDB_dbi dbi{};
+    MDB_txn* txn = nullptr;
+    LMDB_CHECK(mdb_txn_begin(env, nullptr, 0, &txn));
+    LMDB_CHECK(mdb_dbi_open(txn, "k", MDB_CREATE, &dbi));
+
+    uint64_t en_lote = 0;
+    while (en_lote < batch && escritos < registros) {
+      // Clave: [lotería u8][ts u64][taquilla u16][seq u16]
+      // La lotería se cicla entre 6; el ts crece; la taquilla es fija por hilo.
+      const uint8_t lottery = static_cast<uint8_t>(escritos % 6);
+      const uint64_t ts = 1577836800ULL + (escritos / 600);
+      const uint16_t seq = static_cast<uint16_t>(escritos % 65536);
+
+      std::array<uint8_t, 13> key{};
+      key[0] = lottery;
+      keys::put_be64(&key[1], ts);
+      keys::put_be16(&key[9], taquilla_id);
+      keys::put_be16(&key[11], seq);
+
+      // Valor: [tipo u8][selecciones u7][monto u8]
+      std::array<uint8_t, 16> val{};
+      val[0] = static_cast<uint8_t>(rng.next() % 3);  // tipo
+      for (size_t b = 1; b < 8; ++b)
+        val[b] = static_cast<uint8_t>(rng.next() & 0xFF);
+      val[8] = static_cast<uint8_t>((rng.next() % 10000) & 0xFF);
+      val[9] = static_cast<uint8_t>((rng.next() % 10000) >> 8);
+
+      MDB_val k{key.size(), key.data()};
+      MDB_val v{val.size(), val.data()};
+      LMDB_CHECK(mdb_put(txn, dbi, &k, &v, 0));
+      ++escritos;
+      ++en_lote;
+    }
+
+    auto c0 = std::chrono::steady_clock::now();
+    LMDB_CHECK(mdb_txn_commit(txn));
+    commit_ms.push_back(std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - c0)
+                            .count());
+    mdb_dbi_close(env, dbi);
+  }
+
+  auto t1 = std::chrono::steady_clock::now();
+  result.registros = escritos;
+  result.duracion_ms =
+      std::chrono::duration<double, std::milli>(t1 - t0).count();
+  std::sort(commit_ms.begin(), commit_ms.end());
+  result.commit_p50_ms = percentile(commit_ms, 50);
+  result.commit_p95_ms = percentile(commit_ms, 95);
+}
+
+/// @brief Benchmark de escritura concurrente: N taquillas escribiendo en
+///        paralelo sobre un mismo entorno LMDB.
+///
+/// LMDB solo permite un escritor a la vez (su constraint fundamental). Este
+/// benchmark demuestra cuánto se degrada el rendimiento cuando múltiples
+/// taquillas compiten por el escritor serializado.
+///
+/// @param[in] out        Archivo LMDB de salida.
+/// @param[in] n_taquillas Cantidad de taquillas (hilos).
+/// @param[in] registros  Registros por taquilla.
+/// @param[in] batch      Registros por transacción.
+/// @param[in] map_gb     Tope del mapa en GiB.
+/// @param[in] seed       Semilla base.
+void run_write_concurrent(const std::string& out, uint32_t n_taquillas,
+                          uint64_t registros, uint64_t batch, uint64_t map_gb,
+                          uint64_t seed) {
+  MDB_env* env = nullptr;
+  LMDB_CHECK(mdb_env_create(&env));
+  LMDB_CHECK(mdb_env_set_maxdbs(env, 2));
+  LMDB_CHECK(mdb_env_set_mapsize(env, map_gb * 1024ULL * 1024ULL * 1024ULL));
+  LMDB_CHECK(mdb_env_set_maxreaders(env, n_taquillas + 1));
+  LMDB_CHECK(mdb_env_open(env, out.c_str(), MDB_NOSUBDIR, 0664));
+
+  std::mutex mtx;
+  std::vector<TaquillaResult> results(n_taquillas);
+
+  auto t0 = std::chrono::steady_clock::now();
+
+  // Lanzar hilos — cada uno simula una taquilla.
+  std::vector<std::thread> threads;
+  threads.reserve(n_taquillas);
+  for (uint32_t i = 0; i < n_taquillas; ++i) {
+    threads.emplace_back(taquilla_writer, env, static_cast<uint16_t>(i),
+                         registros, batch, seed, std::ref(mtx),
+                         std::ref(results[i]));
+  }
+  for (auto& t : threads) t.join();
+
+  auto t1 = std::chrono::steady_clock::now();
+  const double secs = std::chrono::duration<double>(t1 - t0).count();
+
+  // Agregar resultados.
+  uint64_t total_registros = 0;
+  std::vector<double> all_commit_p50, all_commit_p95;
+  for (const auto& r : results) {
+    total_registros += r.registros;
+    all_commit_p50.push_back(r.commit_p50_ms);
+    all_commit_p95.push_back(r.commit_p95_ms);
+  }
+  std::sort(all_commit_p50.begin(), all_commit_p50.end());
+  std::sort(all_commit_p95.begin(), all_commit_p95.end());
+
+  const uint64_t bytes = total_registros * (13 + 16);
+  const uint64_t file_bytes = static_cast<uint64_t>(fs::file_size(out));
+
+  std::cout << "Benchmark de escritura concurrente — " << n_taquillas
+            << " taquillas\n";
+  std::cout << "registros_por_taquilla=" << registros
+            << " total=" << total_registros << " lote=" << batch << "\n";
+  std::cout << "duracion_ms=" << static_cast<uint64_t>(secs * 1000.0) << "\n";
+  std::cout << "rendimiento="
+            << static_cast<uint64_t>(static_cast<double>(total_registros) / secs)
+            << " registros/s, "
+            << static_cast<double>(bytes) / secs / (1024.0 * 1024.0)
+            << " MB/s\n";
+  std::cout << "commit_taquilla_ms p50=" << percentile(all_commit_p50, 50)
+            << " p95=" << percentile(all_commit_p50, 95) << "\n";
+  std::cout << "commit_global_ms p95=" << percentile(all_commit_p95, 95)
+            << "\n";
+  std::cout << "bytes_en_archivo=" << file_bytes << "\n";
+
+  // Desglose por taquilla.
+  for (uint32_t i = 0; i < n_taquillas; ++i) {
+    std::cout << "  taquilla_" << i << "=" << results[i].registros
+              << " registros en " << static_cast<uint64_t>(results[i].duracion_ms)
+              << " ms (commit p50=" << results[i].commit_p50_ms << " ms)\n";
+  }
+
   mdb_env_close(env);
 }
 
@@ -488,6 +662,7 @@ int main(int argc, char** argv) {
     std::string db_path;
     uint64_t records = 1000000, batch = 50000, map_gb = 8, seed = 42;
     uint64_t n_lookup = 200000;
+    uint32_t n_taquillas = 1;
     int lottery = -1;
     bool force = false, cold = false;
 
@@ -498,7 +673,9 @@ int main(int argc, char** argv) {
           throw std::runtime_error(a + " requiere un valor");
         return argv[++i];
       };
-      if (a == "write-append" || a == "write-random") mode = a;
+      if (a == "write-append" || a == "write-random" ||
+          a == "write-concurrent")
+        mode = a;
       else if (a == "read-lookup" || a == "read-scan" || a == "read-index")
         mode = a;
       else if (a == "--out") out = val();
@@ -508,6 +685,7 @@ int main(int argc, char** argv) {
       else if (a == "--map-gb") map_gb = std::stoull(val());
       else if (a == "--seed") seed = std::stoull(val());
       else if (a == "--n") n_lookup = std::stoull(val());
+      else if (a == "--taquillas") n_taquillas = std::stoul(val());
       else if (a == "--lottery") lottery = std::stoi(val());
       else if (a == "--cold") cold = true;
       else if (a == "--force") force = true;
@@ -515,24 +693,26 @@ int main(int argc, char** argv) {
         std::cout
             << "Uso: bench <modo> [opciones]\n\n"
             << "Modos de escritura:\n"
-            << "  write-append  claves ascendentes + MDB_APPEND (rápido)\n"
-            << "  write-random  claves aleatorias (lento)\n"
+            << "  write-append      claves ascendentes + MDB_APPEND (rápido)\n"
+            << "  write-random      claves aleatorias (lento)\n"
+            << "  write-concurrent  N taquillas escribiendo en paralelo\n"
             << "\nModos de lectura:\n"
             << "  read-lookup   búsquedas puntuales sobre claves existentes\n"
             << "  read-scan     barrido secuencial de una lotería\n"
             << "  read-index    barrido del índice i_animalito\n"
             << "\nOpciones escritura:\n"
-            << "  --out PATH    salida (default: data/bench.lmdb)\n"
-            << "  --records N   registros (default: 1000000)\n"
-            << "  --batch M     tamaño de lote (default: 50000)\n"
-            << "  --map-gb G    tamaño del mapa en GB (default: 8)\n"
-            << "  --seed S      semilla (default: 42)\n"
+            << "  --out PATH        salida (default: data/bench.lmdb)\n"
+            << "  --records N       registros (default: 1000000)\n"
+            << "  --batch M         tamaño de lote (default: 50000)\n"
+            << "  --map-gb G        tamaño del mapa en GB (default: 8)\n"
+            << "  --seed S          semilla (default: 42)\n"
+            << "  --taquillas T     taquillas para write-concurrent (default: 1)\n"
             << "\nOpciones lectura:\n"
-            << "  --db PATH     dataset a leer (requerido)\n"
-            << "  --n N         cantidad de lookups (default: 200000)\n"
-            << "  --lottery L   lotería para read-scan (default: 0)\n"
-            << "  --cold        liberar caché de páginas antes de medir\n"
-            << "\n  --force       borrar salida existente (escritura)\n";
+            << "  --db PATH         dataset a leer (requerido)\n"
+            << "  --n N             cantidad de lookups (default: 200000)\n"
+            << "  --lottery L       lotería para read-scan (default: 0)\n"
+            << "  --cold            liberar caché de páginas antes de medir\n"
+            << "\n  --force           borrar salida existente (escritura)\n";
         return 0;
       } else {
         throw std::runtime_error("argumento desconocido: " + a);
@@ -541,11 +721,12 @@ int main(int argc, char** argv) {
 
     if (mode.empty())
       throw std::runtime_error(
-          "indica un modo: write-append, write-random, "
+          "indica un modo: write-append, write-random, write-concurrent, "
           "read-lookup, read-scan, read-index");
 
-    // Escritura (Fase 2)
-    if (mode == "write-append" || mode == "write-random") {
+    // Escritura (Fase 2 y concurrente)
+    if (mode == "write-append" || mode == "write-random" ||
+        mode == "write-concurrent") {
       if (fs::exists(out)) {
         if (!force)
           throw std::runtime_error(
@@ -554,8 +735,12 @@ int main(int argc, char** argv) {
         fs::remove(out);
         fs::remove(out + "-lock");
       }
-      run_write_bench(out, records, batch, mode == "write-append", map_gb,
-                      seed);
+      if (mode == "write-concurrent") {
+        run_write_concurrent(out, n_taquillas, records, batch, map_gb, seed);
+      } else {
+        run_write_bench(out, records, batch, mode == "write-append", map_gb,
+                        seed);
+      }
       return 0;
     }
 

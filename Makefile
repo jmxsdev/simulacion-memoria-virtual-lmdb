@@ -30,7 +30,7 @@ $(QUERY): $(QUERY_SRCS) $(COMMON_HDRS) | $(BIN)
 	$(CXX) $(CXXFLAGS) $(QUERY_SRCS) -o $@ $(LDLIBS)
 
 $(BENCH): $(BENCH_SRCS) $(COMMON_HDRS) | $(BIN)
-	$(CXX) $(CXXFLAGS) $(BENCH_SRCS) -o $@ $(LDLIBS)
+	$(CXX) $(CXXFLAGS) $(BENCH_SRCS) -o $@ $(LDLIBS) -lpthread
 
 # Prueba de humo: 1M de jugadas, lo demás por defecto; imprime el resumen
 # del manifiesto. Determinista: la misma corrida produce el mismo archivo.
