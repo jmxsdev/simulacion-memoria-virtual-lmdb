@@ -1,4 +1,4 @@
-# Simulación de Memoria Virtual con LMDB — Fase 1
+# Simulación de Memoria Virtual con LMDB
 
 Proyecto académico (arquitectura del computador): usar LMDB (una base de datos
 clave-valor mapeada a memoria) para manejar grandes volúmenes de datos de
@@ -9,6 +9,18 @@ El dataset es sintético pero realista en el dominio: jugadas de lotería
 venezolana (animalitos, terminales, tripletas) que registran las taquillas a lo
 largo de los días, más los resultados de los sorteos a los que se juega.
 
+## Documentación
+
+La carpeta [`docs/`](docs/) contiene material de estudio para entender el
+proyecto y preparar la defensa:
+
+| Documento | Qué contiene |
+| --- | --- |
+| [`docs/00-como-usar-el-makefile.md`](docs/00-como-usar-el-makefile.md) | Qué es `make`, cómo compilar, generar datasets y limpiar. |
+| [`docs/01-guia-de-lectura-del-codigo.md`](docs/01-guia-de-lectura-del-codigo.md) | Qué es un `.h`, en qué orden leer los 6 archivos, con diagramas. |
+| [`docs/02-que-es-lmdb-y-memoria-virtual.md`](docs/02-que-es-lmdb-y-memoria-virtual.md) | Clave-valor, `mmap`, caché de páginas, fallos de página, TLB, y el vínculo con Patterson y Hennessy §5.4. |
+| [`docs/03-lmdb-en-este-proyecto.md`](docs/03-lmdb-en-este-proyecto.md) | Las 5 sub-bases, el esquema de claves, la técnica de caché fría y la lectura de negocio. |
+
 ## Estructura
 
 - `src/types.h` — constantes del dominio y estructuras en memoria.
@@ -16,7 +28,10 @@ largo de los días, más los resultados de los sorteos a los que se juega.
   BIG-endian porque LMDB compara claves con `memcmp`: el big-endian hace que el
   orden lexicográfico coincida con el orden numérico, que es de lo que dependen
   los barridos por rango.
+- `src/env.h` — utilidades compartidas de LMDB (abrir entorno, sub-bases, PRNG).
 - `src/generator.cpp` — generador determinista del dataset.
+- `src/query.cpp` — capa de consultas de solo lectura y validación.
+- `src/bench.cpp` — benchmarks de escritura, lectura y concurrencia.
 
 ## Sub-bases LMDB
 
@@ -58,7 +73,7 @@ Ejemplos:
 ./bin/query --db data/smoke.lmdb range --lottery 0 --from 1577836800 --to 1578441600
 ./bin/query --db data/smoke.lmdb animalito-stats --lottery 0
 ./bin/query --db data/smoke.lmdb racha --lottery 0 --animal 5
-./bin/query --db data.smoke.lmdb taquilla --taquilla 7
+./bin/query --db data/smoke.lmdb taquilla --taquilla 7
 ./bin/query --db data/smoke.lmdb validate   # 149 comprobaciones contra el manifiesto
 
 # Benchmark de lectura: lookups puntuales (tibio y frío)

@@ -23,3 +23,6 @@ informe/*.synctex.gz
 .DS_Store
 *~
 texput.log
+
+# Tooling local
+.atl/
