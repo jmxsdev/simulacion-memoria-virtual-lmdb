@@ -1,9 +1,13 @@
-# Makefile — Proyecto académico de memoria virtual con LMDB (Fase 1: generador).
+# Makefile — Proyecto académico de memoria virtual con LMDB.
+# Construye las tres herramientas: generator, query y bench.
 CXX      ?= g++
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra
-# NOTA: el -lmdb plano falla en este enlazador aunque /usr/lib/liblmdb.so
-# exista; enlazar la ruta completa funciona. Ajusta si compilas en otra máquina.
-LDLIBS   := /usr/lib/liblmdb.so
+# LMDB se enlaza con -llmdb: el flag -l antepone "lib" y agrega ".so", de modo
+# que -llmdb busca liblmdb.so (la doble L es el nombre real de la librería).
+# CUIDADO: -lmdb buscaría libmdb.so, que no existe, y fallaría. Si tu
+# distribución guarda liblmdb.so fuera de las rutas estándar del enlazador,
+# usa la ruta completa, p. ej. /usr/lib/x86_64-linux-gnu/liblmdb.so
+LDLIBS   := -llmdb
 
 BIN := bin
 SRC := src

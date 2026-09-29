@@ -20,6 +20,7 @@ proyecto y preparar la defensa:
 | [`docs/01-guia-de-lectura-del-codigo.md`](docs/01-guia-de-lectura-del-codigo.md) | Qué es un `.h`, en qué orden leer los 6 archivos, con diagramas. |
 | [`docs/02-que-es-lmdb-y-memoria-virtual.md`](docs/02-que-es-lmdb-y-memoria-virtual.md) | Clave-valor, `mmap`, caché de páginas, fallos de página, TLB, y el vínculo con Patterson y Hennessy §5.4. |
 | [`docs/03-lmdb-en-este-proyecto.md`](docs/03-lmdb-en-este-proyecto.md) | Las 5 sub-bases, el esquema de claves, la técnica de caché fría y la lectura de negocio. |
+| [`docs/04-taquillas-hilos-y-concurrencia.md`](docs/04-taquillas-hilos-y-concurrencia.md) | Hilos, taquillas, `lock`/`mutex`, caché compartido y ley de Amdahl, con citas del libro. |
 
 ## Estructura
 

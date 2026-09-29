@@ -16,6 +16,7 @@ este orden.
 | [01-guia-de-lectura-del-codigo.md](01-guia-de-lectura-del-codigo.md) | Qué es un header, por qué existen `types.h`, `keys.h` y `env.h`, y en qué orden leer los 6 archivos fuente con diagramas de dependencias y de flujo de datos. |
 | [02-que-es-lmdb-y-memoria-virtual.md](02-que-es-lmdb-y-memoria-virtual.md) | Base de datos clave-valor, LMDB, `mmap`, caché de páginas, fallos de página mayor/menor, TLB y la conexión con el capítulo 5.4 de Patterson y Hennessy. |
 | [03-lmdb-en-este-proyecto.md](03-lmdb-en-este-proyecto.md) | Las 5 sub-bases, el esquema de claves byte a byte, los 3 binarios, la técnica de caché fría, la medición de fallos de página y la lectura de negocio. |
+| [04-taquillas-hilos-y-concurrencia.md](04-taquillas-hilos-y-concurrencia.md) | Qué es un hilo a nivel de arquitectura, por qué cada taquilla es un hilo, el `lock`/`mutex`, el caché compartido y la ley de Amdahl, con citas del libro. |
 
 ## Ruta rápida para la defensa
 
@@ -28,6 +29,9 @@ este orden.
 4. Cerrar con [03-lmdb-en-este-proyecto.md](03-lmdb-en-este-proyecto.md), que
    ata la teoría con las decisiones concretas del código y los resultados
    medidos.
+5. Repasar
+   [04-taquillas-hilos-y-concurrencia.md](04-taquillas-hilos-y-concurrencia.md)
+   para defender el benchmark concurrente y la relación taquilla-hilo-caché.
 
 > Nota: todos los fragmentos de código y los nombres de funciones citados en
 > estos documentos fueron verificados leyendo los archivos reales de `src/`.

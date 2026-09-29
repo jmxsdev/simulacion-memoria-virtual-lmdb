@@ -9,7 +9,7 @@ el dataset de prueba y limpiar los artefactos sin tocar los datos.
 Compilar a mano un proyecto de C++ no es difícil, pero sí repetitivo:
 
 ```sh
-g++ -std=c++17 -O2 -Wall -Wextra src/query.cpp -o bin/query /usr/lib/liblmdb.so
+g++ -std=c++17 -O2 -Wall -Wextra src/query.cpp -o bin/query -llmdb
 ```
 
 Cada vez que tocas un archivo tienes que recordar qué compilación le
@@ -34,12 +34,13 @@ eso, si ejecutas `make` dos veces seguidas, la segunda no compila nada: dirá
 El Makefile completo (`Makefile`) es corto, 47 líneas:
 
 ```sh
-# Makefile — Proyecto académico de memoria virtual con LMDB (Fase 1: generador).
+# Makefile — Proyecto académico de memoria virtual con LMDB.
+# Construye las tres herramientas: generator, query y bench.
 CXX      ?= g++
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra
-# NOTA: el -lmdb plano falla en este enlazador aunque /usr/lib/liblmdb.so
-# exista; enlazar la ruta completa funciona. Ajusta si compilas en otra máquina.
-LDLIBS   := /usr/lib/liblmdb.so
+# LMDB se enlaza con -llmdb (el flag -l antepone "lib" y agrega ".so",
+# así que -llmdb busca liblmdb.so; -lmdb buscaría libmdb.so y fallaría).
+LDLIBS   := -llmdb
 
 BIN := bin
 SRC := src
@@ -97,7 +98,7 @@ Un Makefile tiene tres ingredientes:
 | --- | --- | --- |
 | `CXX` | `g++` | El compilador de C++ que se usa. |
 | `CXXFLAGS` | `-std=c++17 -O2 -Wall -Wextra` | Flags que se le pasan al compilador. |
-| `LDLIBS` | `/usr/lib/liblmdb.so` | Biblioteca(s) con las que se enlaza el binario. |
+| `LDLIBS` | `-llmdb` | Biblioteca(s) con las que se enlaza el binario. |
 | `BIN` | `bin` | Carpeta donde quedan los ejecutables. |
 | `SRC` | `src` | Carpeta donde está el código fuente. |
 | `GEN`, `QUERY`, `BENCH` | `bin/generator`, `bin/query`, `bin/bench` | Rutas de los tres binarios. |
@@ -131,7 +132,7 @@ Traducido a español:
 > El objetivo `bin/query` depende de `src/query.cpp`, `src/types.h`,
 > `src/keys.h` y `src/env.h`, y además **necesita que exista** la carpeta `bin`.
 > Para construirlo, ejecuta
-> `g++ -std=c++17 -O2 -Wall -Wextra src/query.cpp -o bin/query /usr/lib/liblmdb.so`.
+> `g++ -std=c++17 -O2 -Wall -Wextra src/query.cpp -o bin/query -llmdb`.
 
 Aquí aparecen dos variables automáticas de `make`:
 
@@ -252,18 +253,32 @@ de header no se propagaría y tendrías binarios inconsistentes.
 
 ## 5. Los tres gotchas del Makefile
 
-### 5.1 La ruta completa de la biblioteca LMDB
+### 5.1 Cómo se enlaza la biblioteca LMDB (`-llmdb`)
 
 ```sh
-LDLIBS   := /usr/lib/liblmdb.so
+LDLIBS   := -llmdb
 ```
 
-En un proyecto típico en Linux uno escribiría `-llmdb` (enlazar `liblmdb.so`
-buscándola en las rutas estándar). En esta máquina ese `-lmdb` plano **falla**
-aunque el archivo `/usr/lib/liblmdb.so` exista: el enlazador no encuentra un
-nombre que pueda resolver. La solución documentada en el propio Makefile es
-pasar la **ruta completa** del archivo `.so`, que sí funciona. Si compilas en
-otra máquina, revisa dónde está `liblmdb.so` y ajusta la ruta.
+El flag `-l` tiene una regla de nombres que hay que entender bien: **antepone
+`lib` y agrega `.so`** al nombre que le pases. Entonces:
+
+| Flag | Nombre que busca | ¿Existe? |
+| --- | --- | --- |
+| `-llmdb` | `lib` + `lmdb` + `.so` = `liblmdb.so` | Sí |
+| `-lmdb` | `lib` + `mdb` + `.so` = `libmdb.so` | **No** (error de enlace) |
+
+Por eso el flag correcto es `-llmdb` con **doble L**: la librería se llama
+`liblmdb.so` (la "l" inicial es de "lib" y la segunda de "lmdb"). Es un error
+clásico escribir `-lmdb` y ver `cannot find -lmdb`, porque el enlazador estaría
+buscando `libmdb.so`. El proyecto usa `-llmdb`, que es el flag estándar y
+portable: funciona en cualquier Linux donde `liblmdb.so` esté en las rutas
+estándar del enlazador.
+
+Si tu distribución guarda la librería en una ruta no estándar, puedes indicar
+la carpeta con `-L` (`-L/ruta/de/liblmdb -llmdb`) o pasar la **ruta completa**
+del archivo `.so`, que también funciona. La instalación de la librería se hace
+con el gestor de paquetes (`lmdb` en Arch, `liblmdb-dev` en Debian/Ubuntu); no
+forma parte del código del proyecto.
 
 ### 5.2 `-lpthread` solo para `bench`
 
@@ -276,6 +291,11 @@ $(BENCH): $(BENCH_SRCS) $(COMMON_HDRS) | $(BIN)
 taquilla) y un `std::mutex`. Eso necesita la biblioteca de hilos POSIX, que se
 enlaza con `-lpthread`. `generator` y `query` no usan hilos, por eso no la
 llevan. Cada binario enlaza lo que realmente necesita.
+
+Matiz técnico: en glibc moderna (2.34 y posteriores) la implementación de
+pthreads se integró en `libc`, así que `bin/bench` no muestra una
+`libpthread.so` separada al inspeccionarlo con `ldd`. El flag se mantiene por
+compatibilidad y portabilidad con sistemas más antiguos.
 
 ### 5.3 `clean` nunca borra los datasets
 
@@ -298,6 +318,11 @@ Un script recompilaría todo siempre; `make` compara fechas y recompila solo lo
 que cambió. Además el Makefile declara las dependencias de forma explícita, así
 que el orden y las bibliotecas de cada binario quedan documentados y no
 dependen de que alguien recuerde la línea exacta de `g++`.
+
+**¿Por qué `-llmdb` y no `-lmdb`?**
+Porque el flag `-l` antepone `lib` y agrega `.so` al nombre: `-llmdb` busca
+`liblmdb.so` (que existe) y `-lmdb` buscaría `libmdb.so` (que no existe). La
+doble L no es un capricho, es el nombre real de la librería.
 
 **¿Qué pasa si ejecuto `make` dos veces seguidas?**
 La segunda no compila nada: todos los binarios son más nuevos que sus fuentes y
