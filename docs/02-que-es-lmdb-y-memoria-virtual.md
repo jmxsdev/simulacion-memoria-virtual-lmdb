@@ -1,9 +1,10 @@
 # Qué es LMDB y qué es la memoria virtual
 
 Este documento explica los conceptos que dan sentido al proyecto: qué es una
-base de datos clave-valor, qué hace especial a LMDB, cómo el sistema operativo
-convierte un archivo en memoria accesible, y cómo se conecta todo con el
-capítulo 5.4 del libro de Patterson y Hennessy. Los detalles concretos de este
+base de datos clave-valor (y en qué se diferencia de un JSON o un array), qué es
+un árbol B+, qué es una transacción, qué hace especial a LMDB, cómo el sistema
+operativo convierte un archivo en memoria accesible, y cómo se conecta todo con
+el capítulo 5.4 del libro de Patterson y Hennessy. Los detalles concretos de este
 proyecto están en [03-lmdb-en-este-proyecto.md](03-lmdb-en-este-proyecto.md).
 
 ## 1. Base de datos clave-valor
@@ -20,6 +21,45 @@ solo ve claves y valores como secuencias de bytes. Toda la semántica del domini
 Las operaciones típicas son: **put** (insertar o reemplazar), **get** (buscar
 una clave exacta), **del** (borrar) y **cursor/range** (recorrer claves en
 orden a partir de un punto).
+
+### 1.1 ¿Se parece a un JSON o a un array?
+
+Es una pregunta útil, porque responderla aclara qué es realmente una base
+clave-valor. La respuesta corta: **se parece a los dos por fuera, pero no es
+ninguno de los dos**.
+
+**Comparada con un array:**
+
+| | Array | Base clave-valor |
+| --- | --- | --- |
+| Claves | Solo enteros consecutivos: 0, 1, 2… | Cualquier byte comparable |
+| Acceso por posición | Directo, O(1) | No aplica |
+| Buscar un valor | Recorrer todo, O(n) | Por la clave, O(log n) |
+| Dónde vive | RAM | Disco (puede exceder la RAM) |
+| Sobrevive a un reinicio | No | Sí (durable) |
+
+El array es un caso **particular** de clave-valor: claves 0..n−1, todas en RAM.
+La base clave-valor es "un array con claves arbitrarias, indexado para buscar
+rápido y guardado en disco".
+
+**Comparada con un JSON:**
+
+Un JSON es un **formato de texto** para representar datos. Se *parece* a un
+diccionario (`clave: valor`), pero mecánicamente es otra cosa:
+
+| | JSON | Base clave-valor |
+| --- | --- | --- |
+| Qué es | Formato de texto | Motor de almacenamiento binario |
+| Dónde vive | En memoria (o un archivo que se lee entero) | En disco, indexado |
+| Búsqueda | Parsear todo o buscar en el mapa en RAM | Por índice, sin cargar todo |
+| Tamaño | Limitado por la RAM | Puede ser mayor que la RAM |
+| Transacciones | No | Sí (ACID) |
+| Rangos | No de forma nativa | Sí, con cursores |
+
+**El mejor modelo mental:** una base clave-valor es un **diccionario (como un
+`std::map` de C++) que vive en disco y está indexado por un árbol B+**. Un objeto
+JSON *parece* un diccionario, pero no te da durabilidad, transacciones, rangos ni
+la capacidad de manejar más datos que la RAM. La base clave-valor sí.
 
 ## 2. Qué es LMDB
 
@@ -137,12 +177,66 @@ secuencial frío rinda mucho mejor que el lookup aleatorio frío.
 
 ## 5. Conceptos internos de LMDB
 
-### 5.1 Árbol B+ copia-en-escritura (copy-on-write)
+### 5.1 El árbol B+ en detalle
 
-Un **árbol B+** es una estructura de búsqueda balanceada de gran abanico,
-optimizada para bloques: las claves se mantienen ordenadas y las hojas se
-encadenan, lo que hace que tanto "buscar una clave" como "recorrer un rango"
-sean eficientes. Un árbol B+ de pocos niveles indexa millones de entradas.
+#### 5.1.1 El problema que resuelve
+
+Imagina que tienes 100 millones de jugadas en disco y quieres encontrar una sin
+leerlas todas. Un **árbol de búsqueda binaria** (cada nodo con 2 hijos) sería
+malísimo aquí: para 100 M de claves la altura sería ~27, y como cada nodo vive en
+una página distinta del disco, cada nivel del árbol costaría **un acceso a
+disco**. Buscar una clave serían 27 accesos. Inaceptable.
+
+#### 5.1.2 La idea: abanico alto, árbol bajito
+
+El árbol B+ es un árbol de búsqueda **diseñado para el disco**, con dos ideas
+clave:
+
+1. **Cada nodo ocupa una página** (4 KB típicamente) y contiene muchísimas claves,
+   no una. Un nodo puede tener cientos o miles de hijos: eso es el **abanico
+   alto** (*high fanout*).
+2. **Con abanico alto, el árbol es bajito.** Con 1000 hijos por nodo, un árbol de
+   3 niveles indexa 1000³ = **mil millones** de claves. Buscar cualquiera de ellas
+   cuesta **3 accesos a disco**, no 27.
+
+```text
+                    [ nodo raíz ]                    ← nivel 0 (1 página)
+                  /       |       \
+        [interno] [interno] [interno]                ← nivel 1 (páginas guía)
+        /   |   \       ...
+    [hoja][hoja][hoja][hoja][hoja] ...               ← nivel 2 (con los DATOS)
+      ↕     ↕     ↕     ↕
+    (hojas enlazadas entre sí → barridos por rango)
+```
+
+#### 5.1.3 Los dos tipos de nodo
+
+- **Nodos internos** (raíz y ramas): contienen solo **claves separadoras** y
+  **punteros** a los hijos. Son la "guía de navegación": "si tu clave es menor que
+  X, ve por este puntero". **No guardan datos.**
+- **Nodos hoja**: contienen las **claves reales y sus valores**. Todas las hojas
+  están al mismo nivel (el árbol está balanceado) y **están enlazadas entre sí**
+  en orden.
+
+#### 5.1.4 Búsqueda y barrido por rango
+
+- **Buscar una clave**: desde la raíz, comparas con las claves separadoras y bajas
+  por los nodos internos hasta llegar a una hoja. Con abanico alto son 3–4
+  páginas leídas.
+- **Barrido por rango**: buscas el extremo inicial y desde ahí **recorres las
+  hojas enlazadas** hacia la derecha. No vuelves a la raíz en cada clave: es un
+  recorrido **secuencial** de páginas. Eso es lo que hace que `read-scan` sea tan
+  rápido y que el kernel pueda aplicar relectura anticipada.
+
+#### 5.1.5 ¿Por qué B+ y no B a secas?
+
+En un **árbol B**, los datos pueden estar también en los nodos internos. En un
+**árbol B+**, todos los datos están en las hojas y las hojas están enlazadas. Eso
+da dos ventajas: los barridos por rango son una sola pasada por las hojas, y los
+nodos internos son más compactos (caben más separadoras → más abanico → árbol más
+bajito).
+
+#### 5.1.6 Copia-en-escritura (copy-on-write)
 
 "**Copia-en-escritura**" significa que cuando una transacción modifica una
 página, LMDB **no la sobreescribe**: escribe una página nueva y actualiza los
@@ -170,7 +264,36 @@ haya más hilos (medido: ×0,70 con 16 taquillas). Eso lleva a las estrategias d
 escalado que se discuten en
 [03-lmdb-en-este-proyecto.md](03-lmdb-en-este-proyecto.md).
 
-### 5.4 Transacciones ACID
+### 5.4 Transacciones
+
+Una **transacción** no es un concepto exclusivo de LMDB ni del caché: es un
+concepto **general de bases de datos** (existe igual en PostgreSQL, SQLite,
+etc.). Es un **grupo de operaciones que se tratan como una sola unidad**: o se
+aplican **todas** (*commit*), o **ninguna** (*abort*). No hay término medio.
+
+#### El ciclo de vida
+
+| Operación | Qué hace |
+| --- | --- |
+| `mdb_txn_begin` | Empieza la transacción |
+| `mdb_txn_commit` | Confirma: los cambios se hacen permanentes y visibles |
+| `mdb_txn_abort` | Cancela: los cambios se descartan y se libera la transacción |
+
+En el proyecto, el **generador** agrupa **50.000 jugadas** por transacción: abre
+la transacción, acumula escrituras, y al llegar a 50.000 hace `commit` y abre la
+siguiente. En **`query`** (solo lectura) se usa `begin` + `abort`: como no se
+escribe nada, no hay nada que confirmar; el `abort` simplemente cierra la
+transacción y libera su instantánea del mundo.
+
+#### ¿Por qué agrupar 50.000 y no una por jugada?
+
+Porque cada `commit` obliga a un **`fsync`**: vaciar los datos al disco
+físicamente, para cumplir la durabilidad. Un `fsync` por jugada sería
+lentísimo. Agrupando 50.000, un solo `fsync` se amortiza entre todas ellas. Por
+eso el commit tarda **11,6 ms en p50** (es un `fsync` real) y aun así el
+rendimiento es de **1,94 M registros/s**.
+
+#### Las propiedades ACID
 
 LMDB ofrece transacciones con las propiedades **ACID**:
 
@@ -180,8 +303,18 @@ LMDB ofrece transacciones con las propiedades **ACID**:
   (gracias a MVCC).
 - **Durabilidad**: al confirmar (`commit`), los datos quedan persistidos aunque
   el proceso o la máquina fallen. El costo de eso es el `fsync` en el commit, y
-  por eso el proyecto agrupa escrituras en lotes: cada commit fuerza a disco, y
-  amortizar commits es clave para el rendimiento.
+  por eso el proyecto agrupa escrituras en lotes.
+
+#### Cómo se conecta con el caché y con el B+
+
+LMDB implementa las transacciones con el **B+ tree copia-en-escritura**: una
+transacción de escritura no modifica páginas en su sitio, sino que crea páginas
+nuevas, y el **`commit` cambia atómicamente una página meta** para que apunte al
+árbol nuevo. Ese cambio de puntero es una operación atómica (como el "intercambio
+atómico" de la sección 2.11 del libro). Mientras tanto, los lectores siguen
+viendo la versión anterior del árbol gracias a MVCC: nunca ven un estado a medio
+construir. Por eso la transacción no es "un concepto del caché", pero su
+implementación en LMDB está íntimamente ligada al `mmap` y al B+.
 
 ### 5.5 MDB_APPEND
 
@@ -282,6 +415,20 @@ diseño más característica.
 Es el control de concurrencia multiversión: cada lector ve una instantánea
 consistente sin bloquear al escritor. Gracias a la copia-en-escritura, las
 consultas del proyecto (`query`) pueden correr sin interferir con escrituras.
+
+**¿Qué es un árbol B+ y por qué lo usa LMDB?**
+Es un árbol de búsqueda balanceado de **abanico alto** donde cada nodo ocupa una
+página y las hojas están enlazadas. Con pocos niveles indexa millones de claves,
+así que buscar cuesta 3–4 accesos a página en vez de decenas. Las hojas
+enlazadas hacen que recorrer un rango sea una sola pasada secuencial. LMDB lo usa
+porque es ideal para datos en disco: minimiza los accesos a página (que es lo que
+un fallo de página cobra caro).
+
+**¿Qué es una transacción y por qué agrupan 50.000 escrituras?**
+Una transacción es un grupo de operaciones que se aplican todas o ninguna
+(ACID). Agrupar 50.000 escrituras amortiza el `fsync` del `commit`, que es lo
+caro: sin lotes, cada jugada pagaría su propio vaciado a disco. Por eso el
+commit tarda ~11,6 ms y aun así el rendimiento es de ~1,94 M registros/s.
 
 **¿Por qué LMDB solo permite un escritor?**
 Porque simplifica la consistencia y la durabilidad sin sacrificar la
