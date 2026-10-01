@@ -394,7 +394,7 @@ del B+tree por sub-base; tamaño y duración). Dos garantías verificadas:
 \begin{itemize}
     \item \textbf{Determinismo}: al regenerar el dataset de humo con la
     misma semilla tras refactorizar el código, el archivo resultó byte a byte
-    idéntico (188{,}751{,}872~B).
+    idéntico (188{,}260{,}352~B).
     \item \textbf{Orden de claves}: una auto-prueba camina el B+tree con un
     cursor y verifica que las marcas de tiempo no descienden dentro de cada
     lotería (codificación big-endian correcta).
@@ -410,7 +410,7 @@ del B+tree por sub-base; tamaño y duración). Dos garantías verificadas:
 \midrule
 Jugadas generadas & 1\,000\,000 (validación de agregados: aprobada) \\
 Sorteos & 37\,230 (6 loterías $\times$ 3 años) \\
-Tamaño del archivo & 188\,751\,872 B ($\approx$ 180 MB) \\
+Tamaño del archivo & 188\,260\,352 B ($\approx$ 180 MB) \\
 Duración & $\approx$ 3 s (reloj de pared, esta máquina) \\
 Mezcla de tipos & animalito 75,0 \% · terminal 20,0 \% · tripleta 5,0 \% \\
 Auto-prueba de orden & aprobada \\
@@ -629,18 +629,23 @@ el efecto frío con mayor claridad (Tabla~\ref{tab:fase5_10m}).
 \toprule
 \textbf{Modo} & \textbf{Tibio ops/s} & \textbf{Frío ops/s} & \textbf{Factor} & \textbf{Frío majflt} \\
 \midrule
-read-lookup (200~k) & 917\,775 & 6\,068 & $\times$151 & 83\,423 \\
-read-scan (1,67~M) & 2\,669\,115 & 1\,521\,874 & $\times$1,8 & 78 \\
+read-lookup (200~k) & 907\,327 & 3\,400 & $\times$267 & 83\,251 \\
+read-scan (1,67~M) & 2\,029\,871 & 1\,414\,438 & $\times$1,4 & 77 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 El efecto frío en lookups ahora es \textbf{devastador}: factor
-$\times 151$ de lentitud, con 83\,423~fallos mayores (cada uno trae 4~KB
+$\times 267$ de lentitud, con 83\,251~fallos mayores (cada uno trae 4~KB
 desde el dispositivo). Esto confirma que con un dataset que excede la RAM,
 la paginación por demanda domina el rendimiento de accesos aleatorios. Los
-barridos secuenciales siguen siendo resilientes ($\times 1{,}8$) gracias a
+barridos secuenciales siguen siendo resilientes ($\times 1{,}4$) gracias a
 la relectura anticipada del kernel.
+
+Las cifras de \emph{fallos de página} son muy estables entre corridas
+($\pm$0{,}3\,\%), mientras que el \emph{throughput} frío depende del estado
+del disco y del caché en el momento de la medición; por eso conviene leerlas
+como órdenes de magnitud, no como valores exactos.
 
 % ----------------------------------------------------------------
 % 7. PLAN Y CRITERIOS DE ÉXITO
@@ -710,7 +715,7 @@ mediciones propias, no teoría copiada. \\
     \item La validación de 149/149 comprobaciones contra el manifiesto
     demuestra que la capa de consultas es correcta y reproducible.
     \item Los benchmarks de lectura confirmaron la predicción teórica: los
-    accesos aleatorios (lookups) son $\times 151$ más lentos en caché fría
+    accesos aleatorios (lookups) son $\times 267$ más lentos en caché fría
     que en tibia para un dataset de 10~GB; los accesos secuenciales apenas
     se afectan ($\times 1{,}8$) gracias a la relectura anticipada del kernel.
     \item La optimización con hints de \texttt{madvise} demostró que

@@ -21,7 +21,7 @@ con la respuesta.
 | Dato | Valor |
 | --- | --- |
 | Tamaño por jugada en disco | ≈ 180 B |
-| Dataset de humo | 1 M de jugadas = 188 751 872 B (≈ 180 MB) |
+| Dataset de humo | 1 M de jugadas = 188 260 352 B (≈ 180 MB) |
 | Escala | 10 M ≈ 1,57 GB · 100 M ≈ 18 GB |
 | Sorteos del dataset de humo | 37 230 |
 | Escritura ordenada (append) | 1,94 M reg/s · 192 MB/s · commit p50 11,6 ms |
@@ -32,7 +32,7 @@ con la respuesta.
 | Lookup tibio (1 M) | 1,16 M ops/s · p50 0,81 µs |
 | Lookup frío (1 M) | 314 K ops/s · p99 4,3 µs (×3,7 · 68 fallos mayores) |
 | Barrido tibio vs frío (1 M) | 8,4 M vs 1,15 M ops/s (×7,3) |
-| Lookup frío (10 M) | 6 068 ops/s · 83 423 fallos mayores (×151) |
+| Lookup frío (10 M) | 3 400 ops/s · 83 251 fallos mayores (×267) |
 | Validación | 149/149 comprobaciones |
 
 ---
@@ -76,8 +76,8 @@ caché de páginas del SO **es** el caché de LMDB.
 
 Porque medimos el fenómeno de forma controlada: comparamos el mismo acceso con la
 página en RAM (tibio) y con la página en disco (frío), y cuantificamos la
-diferencia. En el dataset de 10 M, un lookup frío fue **151 veces más lento** y
-generó 83 423 fallos de página mayores. Eso es la paginación por demanda hecha
+diferencia. En el dataset de 10 M, un lookup frío fue **267 veces más lento** y
+generó 83 251 fallos de página mayores. Eso es la paginación por demanda hecha
 medición.
 
 **¿Qué pasa si el dataset cabe entero en la RAM?**
@@ -179,7 +179,7 @@ escritura para ganar velocidad de lectura.
 El generador usa un PRNG determinista (`SplitMix64`) sembrado con `--seed`. Con
 los mismos parámetros y la misma semilla, el archivo sale **byte a byte
 idéntico**. Lo verificamos regenerando tras refactorizar el código: mismo tamaño,
-188 751 872 B. Además hay una auto-prueba que camina el B+tree y confirma que las
+188 260 352 B. Además hay una auto-prueba que camina el B+tree y confirma que las
 marcas de tiempo no descienden dentro de cada lotería.
 
 **¿Cómo validan que las consultas son correctas?**
@@ -213,7 +213,7 @@ mapeadas; hay que aplicar `madvise` sobre la región mmap.
 Porque el kernel detecta el acceso secuencial y activa la **relectura
 anticipada** (*readahead*): trae páginas por delante de que se necesiten. Por eso
 el barrido frío solo generó 11 fallos mayores y cayó apenas ×1,8, mientras los
-lookups aleatorios (que no pueden anticiparse) cayeron ×151.
+lookups aleatorios (que no pueden anticiparse) cayeron ×267.
 
 **¿Qué demuestra el experimento con los hints de `madvise`?**
 
@@ -303,10 +303,11 @@ Porque requiere root. `madvise(MADV_DONTNEED)` sobre la región mmap logra el mi
 efecto sin privilegios, lo que hace el experimento reproducible en cualquier
 máquina de estudiante.
 
-**"El ×151 en frío, ¿no será un artefacto de la medición?"**
-No: lo respalda el conteo de fallos de página. En modo frío se registraron 83 423
+**"El ×267 en frío, ¿no será un artefacto de la medición?"**
+No: lo respalda el conteo de fallos de página. En modo frío se registraron 83 251
 fallos **mayores** (I/O real al dispositivo), frente a 0 en modo tibio. El tiempo
-extra corresponde exactamente a esos accesos a disco.
+extra corresponde exactamente a esos accesos a disco. El conteo de fallos es muy
+estable entre corridas; el throughput frío varía más porque depende del disco.
 
 **"¿Qué pasa con el `-lmdb` del Makefile?"**
 El flag correcto es `-llmdb`, porque `-l` antepone "lib" y agrega ".so": `-llmdb`
@@ -343,7 +344,7 @@ make smoke
 
 Si te preguntan por qué el frío del dataset de 1 M no es tan dramático, responde:
 "porque 180 MB caben en RAM; el efecto se dispara en el dataset de 10 M, donde
-medimos ×151 y 83 423 fallos mayores".
+medimos ×267 y 83 251 fallos mayores".
 
 **Consejo:** si la defensa es en tu máquina, ten el dataset de humo ya generado
 para no perder tiempo. Si es en otra, ten el repositorio clonado y las

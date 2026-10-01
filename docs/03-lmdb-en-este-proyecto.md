@@ -347,8 +347,8 @@ Dataset de 1 M de jugadas (≈ 180 MB), tibio vs. frío con `madvise`.
 | `read-index` (900k) | 1.866.943 | 1.499.141 | ×1,2 | 76 | 0,072 µs |
 
 Lectura sobre el dataset de **10 M (1,57 GB)**: el lookup en frío cae a
-**6.068 ops/s** con **83.423 fallos mayores** (unas **×151** respecto del
-tibio), mientras que el barrido apenas cae ×1,8. La lección: cuando el dataset
+**3.400 ops/s** con **83.251 fallos mayores** (unas **×267** respecto del
+tibio), mientras que el barrido apenas cae ×1,4. La lección: cuando el dataset
 **no cabe en RAM**, el patrón de acceso aleatorio es demoledor y el secuencial
 sobrevive gracias a la localidad.
 

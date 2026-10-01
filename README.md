@@ -166,7 +166,7 @@ validarán sus consultas.
   500M ≈ 90 GB.
 - Auto-prueba de orden de claves big-endian: **APROBADA**.
 - Determinismo verificado: al regenerar con la misma semilla, el archivo
-  salió byte a byte idéntico (188,751,872 B).
+  salió byte a byte idéntico (188,260,352 B).
 
 ## Plan de fases
 

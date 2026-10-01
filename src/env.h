@@ -80,7 +80,8 @@ class SplitMix64 {
   explicit SplitMix64(uint64_t seed) : state_(seed) {}
   /// @brief Produce el siguiente entero crudo de 64 bits.
   uint64_t next() {
-    state_ += 0x9E3779B97F15ULL;
+    // Constante de la proporción áurea de 64 bits (splitmix64 canónico).
+    state_ += 0x9E3779B97F4A7C15ULL;
     uint64_t z = state_;
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
