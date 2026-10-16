@@ -10,14 +10,17 @@ data/*.manifest.json
 # Artefactos de build
 *.o
 
-# Archivos temporales de LaTeX
-informe/*.aux
-informe/*.log
-informe/*.out
-informe/*.toc
-informe/*.fls
-informe/*.fdb_latexmk
-informe/*.synctex.gz
+# Archivos temporales de LaTeX (informe y diapositivas)
+*.aux
+*.log
+*.out
+*.toc
+*.nav
+*.snm
+*.vrb
+*.fls
+*.fdb_latexmk
+*.synctex.gz
 
 # Archivos del sistema
 .DS_Store
