@@ -1,0 +1,352 @@
+%% Diapositivas — Proyecto N.° 13: Simulación de Memoria Virtual con LMDB
+%% Compilar: pdflatex diapositivas.tex  (dos veces)
+\documentclass[aspectratio=169,11pt]{beamer}
+
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+
+\usetheme{Madrid}
+\usecolortheme{default}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{caption}{\insertcaption}
+
+\title[Memoria Virtual con LMDB]{Simulación de Memoria Virtual con LMDB}
+\subtitle{Proyecto N.° 13 --- Arquitectura del Computador}
+\author{Jesús Alberto Mora Lozada \\ \small C.I.: 28.480.557}
+\institute[UC]{Universidad de Carabobo\\Facultad Experimental de Ciencias y Tecnología}
+\date{Octubre de 2026}
+
+\begin{document}
+
+% ----------------------------------------------------------------
+\begin{frame}
+  \titlepage
+\end{frame}
+
+% ----------------------------------------------------------------
+\begin{frame}{Contenido}
+  \tableofcontents
+\end{frame}
+
+% ================================================================
+\section{El Problema}
+% ================================================================
+
+\begin{frame}{El Problema}
+  El enunciado pide estudiar una técnica de los capítulos de
+  \textbf{Memoria y Discos}, implementarla en C++ y \textbf{comparar el
+  rendimiento} en distintos escenarios.
+
+  \vspace{0.4cm}
+  \textbf{Proyecto N.° 13:} usar \textbf{LMDB} para gestionar grandes
+  volúmenes de datos como si fuera \textbf{memoria secundaria}.
+
+  \vspace{0.4cm}
+  \begin{block}{La pregunta que se busca responder}
+    Cuando los datos no caben en RAM, ¿cuánto cuesta \emph{realmente}
+    traerlos del disco? Esa diferencia es la \textbf{paginación por demanda}
+    de la memoria virtual.
+  \end{block}
+
+  \vspace{0.2cm}
+  \textbf{Dominio elegido:} apuestas de lotería venezolana --- registros
+  pequeños y numerosos, con consultas puntuales y por rango (ideal para un
+  B+tree).
+\end{frame}
+
+% ================================================================
+\section{Objetivos}
+% ================================================================
+
+\begin{frame}{Objetivos}
+  \textbf{General:} implementar un sistema en C++ sobre LMDB que gestione
+  grandes volúmenes de datos como memoria secundaria, mida la latencia y
+  demuestre la paginación por demanda.
+
+  \vspace{0.3cm}
+  \textbf{Específicos:}
+  \begin{itemize}
+    \item Diseñar claves binarias que exploten el orden del B+tree
+      (big-endian, índices secundarios, \texttt{MDB\_APPEND}).
+    \item Construir un generador determinista de datasets a escala.
+    \item Medir escritura, latencia y \textbf{fallos de página} mayor/menor.
+    \item Comparar acceso con \textbf{caché tibia} (RAM) vs \textbf{fría}
+      (disco).
+    \item Validar los agregados contra un manifiesto de verdad absoluta.
+  \end{itemize}
+\end{frame}
+
+% ================================================================
+\section{Técnicas Computacionales}
+% ================================================================
+
+\begin{frame}{Técnica 1: memoria virtual y \texttt{mmap}}
+  \begin{columns}
+    \column{0.55\textwidth}
+      \begin{itemize}
+        \item El SO divide la memoria en \textbf{páginas} (4 KB).
+        \item Al acceder a una página ausente ocurre un \textbf{fallo de
+          página}: el kernel la trae del disco.
+        \item \textbf{Mayor} = I/O real al dispositivo; \textbf{menor} =
+          página ya en RAM.
+        \item Traducción virtual$\to$física: tabla de páginas + \textbf{TLB}.
+      \end{itemize}
+    \column{0.45\textwidth}
+      \begin{block}{\texttt{mmap}}
+        LMDB \textbf{mapea el archivo} al espacio de direcciones. Leer una
+        clave es leer \emph{memoria}: el \textbf{caché de páginas del SO
+        ES el caché}.
+      \end{block}
+  \end{columns}
+  \vspace{0.2cm}
+  \footnotesize Fuente: Patterson y Hennessy, \S5.4 (pág. 492), \S5.2--5.3.
+\end{frame}
+
+\begin{frame}{Técnica 2: LMDB y el árbol B+}
+  \begin{columns}
+    \column{0.5\textwidth}
+      \textbf{LMDB} es una base \textbf{clave-valor} (diccionario en disco):
+      \begin{itemize}
+        \item Un archivo mapeado a memoria.
+        \item \textbf{Sin caché propio} (usa el del SO).
+        \item B+tree copia-en-escritura, MVCC.
+        \item \textbf{Un solo escritor} a la vez.
+      \end{itemize}
+    \column{0.5\textwidth}
+      \textbf{Árbol B+} (índice hacia el disco):
+      \begin{itemize}
+        \item Nodos = páginas con \textbf{abanico alto}.
+        \item 3--4 niveles indexan miles de millones de claves.
+        \item \textbf{Hojas enlazadas} $\Rightarrow$ barridos por rango.
+      \end{itemize}
+      \vspace{0.2cm}
+      \footnotesize Búsqueda en 3--4 páginas, no en decenas.
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Técnica 3: claves big-endian}
+  LMDB compara claves con \texttt{memcmp} (bytes crudos). Si un entero va en
+  \textbf{little-endian}, el orden de bytes \textbf{no} coincide con el orden
+  numérico y los rangos fallan.
+
+  \vspace{0.3cm}
+  \begin{block}{Regla del proyecto}
+    Toda clave con enteros multi-byte va en \textbf{BIG-endian}: así el orden
+    lexicográfico de bytes \emph{es} el orden numérico.
+  \end{block}
+
+  \vspace{0.2cm}
+  \begin{tabular}{@{}ll@{}}
+    \toprule
+    Clave \texttt{bets} (13 B) & lotería u8 | ts u64 (BE) | taquilla u16 | seq u16 \\
+    \bottomrule
+  \end{tabular}
+\end{frame}
+
+% ================================================================
+\section{Diseño del sistema}
+% ================================================================
+
+\begin{frame}{Diseño: sub-bases e índices}
+  Un entorno LMDB con \textbf{cinco sub-bases} (una por patrón de consulta):
+
+  \vspace{0.3cm}
+  \begin{table}
+    \centering
+    \footnotesize
+    \begin{tabular}{@{}ll@{}}
+      \toprule
+      \textbf{Base} & \textbf{Para qué} \\
+      \midrule
+      \texttt{bets} & registro maestro (por fecha) \\
+      \texttt{i\_animalito} & frecuencia y rachas por figura \\
+      \texttt{i\_terminal} & frecuencia por terminación \\
+      \texttt{i\_taquilla} & replay por punto de venta \\
+      \texttt{draws} & resultados de los sorteos \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  \vspace{0.2cm}
+  Cada jugada se escribe en la base maestra y en los índices que le tocan.
+\end{frame}
+
+% ================================================================
+\section{Metodología de medición}
+% ================================================================
+
+\begin{frame}{Metodología: tibio vs frío}
+  \begin{itemize}
+    \item \textbf{Tibio:} las páginas están en RAM (caché de páginas).
+    \item \textbf{Frío:} se liberan las páginas antes de medir.
+  \end{itemize}
+
+  \vspace{0.3cm}
+  \begin{alertblock}{Caché fría sin privilegios de root}
+    \texttt{madvise(MADV\_DONTNEED)} sobre la región \texttt{mmap} del archivo
+    (localizada en \texttt{/proc/self/maps}). La alternativa clásica
+    (\texttt{echo 3 > /proc/sys/vm/drop\_caches}) exige root.
+  \end{alertblock}
+
+  \vspace{0.2cm}
+  \textbf{Fallos de página:} diferencia de los contadores \texttt{minflt} y
+  \texttt{majflt} de \texttt{/proc/self/stat} antes y después de cada corrida.
+\end{frame}
+
+% ================================================================
+\section{Análisis y Comparación de Resultados}
+% ================================================================
+
+\begin{frame}{Resultado 1: escritura ordenada vs aleatoria}
+  \begin{table}
+    \centering
+    \begin{tabular}{@{}lrr@{}}
+      \toprule
+      \textbf{Métrica} & \textbf{Append} & \textbf{Aleatorio} \\
+      \midrule
+      Registros/s & 1{,}94 M & 226 K \\
+      Commit p50 & 11{,}6 ms & 101 ms \\
+      Tamaño final & 118 MB & 398 MB \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  \vspace{0.3cm}
+  \begin{block}{Lección}
+    Ordenar las claves da \textbf{$\times$8,6} de rendimiento y
+    \textbf{$\times$3,4} de espacio: cada inserción cae en el borde derecho
+    del B+tree (\texttt{MDB\_APPEND}) en vez de dividir páginas dispersas.
+  \end{block}
+\end{frame}
+
+\begin{frame}{Resultado 2: escritura concurrente (taquillas)}
+  \begin{table}
+    \centering
+    \begin{tabular}{@{}rrrr@{}}
+      \toprule
+      \textbf{Taquillas} & \textbf{Throughput} & \textbf{Commit p50} & \textbf{Degradación} \\
+      \midrule
+      1 & 1{,}34 M reg/s & 11{,}2 ms & --- \\
+      8 & 1{,}00 M reg/s & 24{,}3 ms & $\times$0{,}75 \\
+      16 & 943 K reg/s & 26{,}3 ms & $\times$0{,}70 \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  \vspace{0.3cm}
+  \begin{alertblock}{Cuello de botella}
+    LMDB admite \textbf{un solo escritor}. Añadir taquillas no acelera: es la
+    \textbf{ley de Amdahl} (\S1.8). Solución real: \emph{particionar} los
+    datos, no añadir hilos.
+  \end{alertblock}
+\end{frame}
+
+\begin{frame}{Resultado 3: el costo de la paginación (10M)}
+  \begin{table}
+    \centering
+    \begin{tabular}{@{}lrrr@{}}
+      \toprule
+      \textbf{Modo} & \textbf{Tibio} & \textbf{Frío} & \textbf{Factor} \\
+      \midrule
+      read-lookup (200 k) & 907 K ops/s & 3{,}4 K ops/s & $\times$267 \\
+      read-scan (1,67 M) & 2{,}0 M ops/s & 1{,}4 M ops/s & $\times$1{,}4 \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  \vspace{0.3cm}
+  \begin{block}{Evidencia}
+    El modo frío generó \textbf{83\,251 fallos de página mayores} (I/O real),
+    frente a \textbf{0} en tibio. Los barridos secuenciales sobreviven gracias
+    a la \textbf{relectura anticipada} del kernel.
+  \end{block}
+\end{frame}
+
+\begin{frame}{Resultado 4: escalamiento a 100 millones}
+  \begin{columns}
+    \column{0.5\textwidth}
+      \begin{itemize}
+        \item \textbf{100\,000\,000} de jugadas generadas.
+        \item \textbf{15,5 GB} en disco ($\approx$163 B/jugada).
+        \item Agregados validados \textbf{149/149}.
+        \item B+tree de \textbf{4 niveles} para \texttt{bets}.
+      \end{itemize}
+    \column{0.5\textwidth}
+      \begin{block}{Escala en disco}
+        \centering
+        \begin{tabular}{@{}ll@{}}
+          1 M & 180 MB \\
+          10 M & 1,6 GB \\
+          100 M & 15,5 GB \\
+        \end{tabular}
+      \end{block}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Resultado 5: optimizar también es \emph{no} interferir}
+  Se probaron \emph{hints} al kernel:
+  \begin{itemize}
+    \item \texttt{MADV\_RANDOM} antes de lookups $\Rightarrow$ los
+      \textbf{empeoró $\times$6,3} (desactiva la relectura anticipada que
+      ayudaba).
+    \item \texttt{MADV\_SEQUENTIAL} antes de barridos $\Rightarrow$ mejora
+      marginal ($+$12\%).
+  \end{itemize}
+
+  \vspace{0.3cm}
+  \begin{block}{Conclusión}
+    No interferir con las heurísticas del kernel \textbf{es en sí mismo una
+    optimización}.
+  \end{block}
+\end{frame}
+
+% ================================================================
+\section{Conclusiones}
+% ================================================================
+
+\begin{frame}{Conclusiones}
+  \begin{itemize}
+    \item El dominio de apuestas es ideal: registros pequeños, ordenables y
+      con consultas de negocio reales.
+    \item El diseño de claves big-endian habilita \texttt{MDB\_APPEND} y los
+      barridos por rango ($\times$8,6).
+    \item Los benchmarks confirman la teoría: los accesos aleatorios son
+      \textbf{$\times$267} más lentos en frío; los secuenciales apenas se
+      afectan.
+    \item \textbf{83\,251 fallos de página mayores} medidos: la paginación por
+      demanda existe y se cuantifica.
+    \item LMDB tiene \textbf{un solo escritor}: para escalar a miles de
+      taquillas hay que \emph{particionar}, no añadir hilos.
+    \item El proyecto se validó a escala real: \textbf{100 M de jugadas}
+      (15,5 GB) con 149/149 agregados exactos.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Referencias}
+  \begin{itemize}
+    \item Patterson, D. A. y Hennessy, J. L. (2014). \emph{Estructura y diseño
+      de computadores: la interfaz hardware/software} (4.ª ed.). Reverté.
+      Capítulos 5 (\S5.2--5.4) y 6 (\S6.3--6.7).
+    \item OpenLDAP Foundation. \emph{LMDB: Lightning Memory-Mapped Database}.
+      \url{https://www.lmdb.tech/doc/}
+    \item \texttt{mmap(2)}, \texttt{madvise(2)} --- páginas del manual de Linux.
+  \end{itemize}
+
+  \vspace{0.5cm}
+  \begin{center}
+    \textbf{Repositorio:} \url{https://github.com/jmxsdev/simulacion-memoria-virtual-lmdb}
+  \end{center}
+\end{frame}
+
+\begin{frame}
+  \centering
+  \Huge Gracias
+  \vspace{0.5cm}
+  \normalsize
+  \\ Preguntas y discusión
+\end{frame}
+
+\end{document}

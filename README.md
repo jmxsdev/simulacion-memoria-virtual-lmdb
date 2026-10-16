@@ -23,6 +23,18 @@ proyecto y preparar la defensa:
 | [`docs/04-taquillas-hilos-y-concurrencia.md`](docs/04-taquillas-hilos-y-concurrencia.md) | Hilos, taquillas, `lock`/`mutex`, caché compartido y ley de Amdahl, con citas del libro. |
 | [`docs/05-simulacro-de-defensa.md`](docs/05-simulacro-de-defensa.md) | Preguntas y respuestas modelo para la defensa, preguntas trampa y guion de demostración. |
 
+## Entregables del proyecto
+
+- `informe/` — informe técnico en `.tex` y `.pdf` (secciones: El Problema;
+  Técnicas Computacionales para su Solución; Análisis y Comparación de
+  Resultados).
+- `diapositivas/` — presentación (Beamer) en `.tex` y `.pdf`, basada en el
+  informe.
+- `recursos/mejora-recurso.md` — validación del recurso de ayuda e infografía
+  del Proyecto 13 y propuesta de mejora con su prompt.
+- `docs/` — material de estudio y de apoyo a la defensa.
+- `data/smoke.lmdb.gz` — dataset de humo comprimido (ver *Datasets* más abajo).
+
 ## Estructura
 
 - `src/types.h` — constantes del dominio y estructuras en memoria.
@@ -168,6 +180,38 @@ validarán sus consultas.
 - Auto-prueba de orden de claves big-endian: **APROBADA**.
 - Determinismo verificado: al regenerar con la misma semilla, el archivo
   salió byte a byte idéntico (188,260,352 B).
+
+## Datasets, tamaño del repositorio y límites de GitHub
+
+El repositorio incluye el dataset de humo **comprimido**: `data/smoke.lmdb.gz`
+(≈47 MB, contiene 1.000.000 de jugadas). Para usarlo:
+
+```sh
+gunzip -k data/smoke.lmdb.gz        # crea data/smoke.lmdb
+./bin/query --db data/smoke.lmdb validate
+```
+
+**Por qué solo va ese:** GitHub impone un límite duro de **100 MB por archivo**
+(y avisa a partir de 50 MB). El dataset de humo descomprimido pesa 180 MB, el de
+10M pesa 1,6 GB y el de 100M pesa 15,5 GB, así que **no pueden subirse** al
+repositorio sin Git LFS. Por eso se incluye el de humo comprimido (47 MB, dentro
+del límite) y los demás se reproducen con el generador determinista.
+
+**Cómo reproducir los datasets grandes** (el generador es determinista: misma
+semilla ⇒ mismo archivo byte a byte):
+
+```sh
+make all
+# 1 M de jugadas (180 MB) — el mismo que va comprimido:
+./bin/generator --bets 1000000 --out data/smoke.lmdb
+# 10 M de jugadas (1,6 GB):
+./bin/generator --bets 10000000 --out data/scale.lmdb
+# 100 M de jugadas (15,5 GB) — el punto de operación del experimento:
+./bin/generator --bets 100000000 --map-gb 24 --out data/big.lmdb
+```
+
+Cada corrida escribe junto al dataset un `<nombre>.manifest.json` con los
+agregados exactos, contra el que se valida con `query validate`.
 
 ## Plan de fases
 

@@ -120,7 +120,7 @@ conclusiones que vinculan las mediciones con la teoría de memoria virtual.
 % ----------------------------------------------------------------
 % 1. INTRODUCCIÓN
 % ----------------------------------------------------------------
-\section{Introducción}
+\section{El Problema}
 
 El proyecto plantea: \emph{``Simulación de Memoria Virtual con LMDB: usar LMDB
 para gestionar grandes volúmenes de datos como si fuera memoria secundaria.
@@ -194,9 +194,11 @@ computador.
 % ----------------------------------------------------------------
 % 3. MARCO TEÓRICO
 % ----------------------------------------------------------------
-\section{Marco teórico}
+\section{Técnicas Computacionales para su Solución}
 
-\subsection{Memoria virtual y jerarquía de memoria}
+\subsection{Marco teórico}
+
+\subsubsection{Memoria virtual y jerarquía de memoria}
 
 El sistema de memoria virtual traduce direcciones virtuales a direcciones
 físicas y divide ambos espacios en páginas; la traducción se acelera con la
@@ -217,7 +219,7 @@ Dos conceptos del mismo capítulo gobiernan el rendimiento de nuestro sistema:
     real al dispositivo. Medir ambos distingue RAM de disco.
 \end{itemize}
 
-\subsection{Memoria secundaria y E/S}
+\subsubsection{Memoria secundaria y E/S}
 
 Los datos de LMDB viven en disco o SSD, así que la latencia de un fallo mayor
 depende de la tecnología del dispositivo: discos magnéticos (§6.3,
@@ -226,7 +228,7 @@ Flash (§6.4, pág.~580) con latencias mucho menores y lectura aleatoria mucho
 más barata. La metodología de medición de prestaciones de E/S (§6.7,
 pág.~596) es la base de nuestros benchmarks.
 
-\subsection{LMDB como caso de estudio de memoria virtual}
+\subsubsection{LMDB como caso de estudio de memoria virtual}
 
 LMDB no implementa un caché propio como otros motores: \textbf{mapea el
 archivo de la base de datos al espacio de direcciones virtuales del proceso}
@@ -247,7 +249,7 @@ se paga la latencia del dispositivo. Otras propiedades relevantes del motor:
     llegan ordenadas.
 \end{itemize}
 
-\subsection{Aclaratoria conceptual}
+\subsubsection{Aclaratoria conceptual}
 
 La sección §5.6 del libro (pág.~525) trata de \emph{máquinas virtuales}
 (hipervisores y virtualización de hardware), un concepto distinto de la
@@ -257,9 +259,9 @@ segundo sentido.
 % ----------------------------------------------------------------
 % 4. DISEÑO DEL SISTEMA
 % ----------------------------------------------------------------
-\section{Diseño del sistema}
+\subsection{Diseño del sistema}
 
-\subsection{Modelo de datos}
+\subsubsection{Modelo de datos}
 
 El dataset modela un negocio de apuestas: varias loterías (\emph{Lotto
 Activo}, \emph{La Granjita}, \emph{Guácharo Activo}, \emph{Selva Plus},
@@ -277,7 +279,7 @@ de tres tipos:
 Cada jugada guarda: lotería, marca de tiempo, taquilla, tipo, selección y
 monto jugado. Cada sorteo guarda el animalito que salió.
 
-\subsection{Esquema de claves y sub-bases}
+\subsubsection{Esquema de claves y sub-bases}
 
 Un único entorno LMDB contiene cinco sub-bases con nombre (Tabla~\ref{tab:subbases}).
 Las claves son binarias de largo fijo; todo entero multi-byte en claves va
@@ -326,7 +328,7 @@ inline std::array<uint8_t, kBetsKeySize> encode_bets_key(uint8_t lottery,
 }
 \end{lstlisting}
 
-\subsection{Dimensionamiento}
+\subsubsection{Dimensionamiento}
 \label{sec:dimensionamiento}
 
 La Fase~1 midió $\approx 180$~B por jugada en disco para el dataset de humo,
@@ -399,7 +401,7 @@ Las métricas de las fases 3 y 4 son:
 % ----------------------------------------------------------------
 % 6. RESULTADOS PRELIMINARES
 % ----------------------------------------------------------------
-\section{Resultados experimentales}
+\section{Análisis y Comparación de Resultados}
 
 \subsection{Generador (Fase 1)}
 

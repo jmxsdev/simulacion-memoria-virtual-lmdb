@@ -26,3 +26,6 @@ texput.log
 
 # Tooling local
 .atl/
+
+# Paquete de entrega (regenerable)
+entrega-*.tar.gz
