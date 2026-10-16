@@ -20,9 +20,9 @@ con la respuesta.
 
 | Dato | Valor |
 | --- | --- |
-| Tamaño por jugada en disco | ≈ 180 B |
+| Tamaño por jugada en disco | ≈ 180 B (1M) → ≈ 163 B (100M) |
 | Dataset de humo | 1 M de jugadas = 188 260 352 B (≈ 180 MB) |
-| Escala | 10 M ≈ 1,57 GB · 100 M ≈ 18 GB |
+| Escala medida | 10 M = 1,6 GB · **100 M = 15,5 GB** (validado 149/149) |
 | Sorteos del dataset de humo | 37 230 |
 | Escritura ordenada (append) | 1,94 M reg/s · 192 MB/s · commit p50 11,6 ms |
 | Escritura aleatoria | 226 K reg/s · 22,4 MB/s · commit p50 101 ms |
@@ -85,7 +85,7 @@ medición.
 Que no hay paginación observable: todos los accesos son "tibios" y la diferencia
 frío/tibio desaparece. Por eso el proyecto escala el dataset (1 M → 10 M → 100 M)
 y por eso el experimento definitivo necesita un dataset mayor que la RAM. En una
-máquina de 32 GB, un archivo de 18 GB cabe y no sirve para demostrar frío; haría
+máquina de 32 GB, un archivo de 15,5 GB cabe y no sirve para demostrar frío; haría
 falta una máquina con menos RAM.
 
 ---

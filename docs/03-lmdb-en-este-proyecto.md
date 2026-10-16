@@ -48,37 +48,37 @@ Regla crítica de `src/keys.h`: **todo entero multi-byte dentro de una CLAVE va
 en big-endian**, porque LMDB compara claves con `memcmp`. Los **valores** van en
 little-endian (nunca se comparan).
 
-Tomemos la jugada de ejemplo del README: `lottery 0`, `ts 1577838370`,
-`taquilla 33`, `seq 0`. Las primitivas relevantes son `put_be64` y `put_be16`.
+Tomemos la jugada de ejemplo del README: `lottery 0`, `ts 1577838271`,
+`taquilla 46`, `seq 0`. Las primitivas relevantes son `put_be64` y `put_be16`.
 La clave de `bets` que produce `encode_bets_key` se ve así:
 
 ```text
 campo        valor         bytes (hex)
 lotería      0             00
-ts           1577838370    00 00 00 00 5e 0b e7 22
-taquilla     33            00 21
+ts           1577838271    00 00 00 00 5e 0b e6 bf
+taquilla     46            00 2e
 seq          0             00 00
 ------------------------------------------------
-clave bets (13 bytes):  00 00 00 00 00 5e 0b e7 22 00 21 00 00
+clave bets (13 bytes):  00 00 00 00 00 5e 0b e6 bf 00 2e 00 00
 ```
 
-Detalles: `1577838370` en hexadecimal es `0x5E0BE722`; como es big-endian, ese
-es también el orden de sus bytes. La taquilla 33 es `0x0021`. Ese `ts`
-corresponde a 1.570 segundos después de la época (2020-01-01 00:26:10 UTC).
+Detalles: `1577838271` en hexadecimal es `0x5E0BE6BF`; como es big-endian, ese
+es también el orden de sus bytes. La taquilla 46 es `0x002E`. Ese `ts`
+corresponde a 1.471 segundos después de la época (2020-01-01 00:24:31 UTC).
 
-Si la jugada fuera un animalito con `term = 5`, su clave en `i_animalito`
+Esa jugada es un animalito con selección 15; su clave en `i_animalito`
 (16 B, con relleno final en cero) sería:
 
 ```text
 lotería  animalito  ts (BE)                  taquilla  seq   relleno
-00       05         00 00 00 00 5e 0b e7 22  00 21     00 00 00 00
+00       0f         00 00 00 00 5e 0b e6 bf  00 2e     00 00 00 00
 ```
 
 Y en `i_taquilla`, la clave empieza por la taquilla:
 
 ```text
 taquilla  ts (BE)                  lotería  seq   relleno
-00 21     00 00 00 00 5e 0b e7 22  00       00 00 00 00 00
+00 2e     00 00 00 00 5e 0b e6 bf  00       00 00 00 00 00
 ```
 
 ### Por qué el big-endian hace que un `SET_RANGE` funcione
@@ -185,7 +185,7 @@ Ejemplos:
 
 ```sh
 ./bin/query --db data/smoke.lmdb info
-./bin/query --db data/smoke.lmdb lookup --lottery 0 --ts 1577838370 --taquilla 33 --seq 0
+./bin/query --db data/smoke.lmdb lookup --lottery 0 --ts 1577838271 --taquilla 46 --seq 0
 ./bin/query --db data/smoke.lmdb range --lottery 0 --from 1577836800 --to 1578441600
 ./bin/query --db data/smoke.lmdb animalito-stats --lottery 0
 ./bin/query --db data/smoke.lmdb terminal-stats --lottery 0
@@ -358,8 +358,11 @@ El dataset de humo (1 M de jugadas) da: 1.000.000 jugadas exactas, 37.230
 sorteos (6 loterías × 3 años), 180 MB en disco (≈ **180 B por jugada**,
 incluyendo el B+tree), auto-prueba de orden de claves **APROBADA**,
 determinismo verificado (mismo archivo byte a byte al regenerar) y validación
-contra el manifiesto **149/149**. Para dimensionar: 10 M ≈ 1,8 GB, 50 M ≈ 9 GB,
-**100 M ≈ 18 GB**, 500 M ≈ 90 GB.
+contra el manifiesto **149/149**. El dataset de **100 M** (el punto de
+operación del experimento) también se generó y validó: 100.000.000 jugadas en
+15,5 GB, con agregados exactos 149/149 y altura del B+tree de 4 niveles. Para
+dimensionar (medido): 10 M = 1,6 GB, **100 M = 15,5 GB**; estimado: 50 M ≈ 8 GB,
+500 M ≈ 78 GB.
 
 ## 8. Aplicación al negocio real (taquillas)
 

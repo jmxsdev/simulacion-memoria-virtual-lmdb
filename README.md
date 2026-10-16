@@ -71,7 +71,7 @@ Ejemplos:
 
 # Consultas sobre el dataset generado
 ./bin/query --db data/smoke.lmdb info
-./bin/query --db data/smoke.lmdb lookup --lottery 0 --ts 1577838370 --taquilla 33 --seq 0
+./bin/query --db data/smoke.lmdb lookup --lottery 0 --ts 1577838271 --taquilla 46 --seq 0
 ./bin/query --db data/smoke.lmdb range --lottery 0 --from 1577836800 --to 1578441600
 ./bin/query --db data/smoke.lmdb animalito-stats --lottery 0
 ./bin/query --db data/smoke.lmdb racha --lottery 0 --animal 5
@@ -161,9 +161,10 @@ validarán sus consultas.
 
 - 1,000,000 jugadas exactas; validación de agregados: **APROBADA**.
 - 37,230 sorteos (6 loterías × 3 años).
-- Tamaño en disco: 180 MB → **≈180 B por jugada** incluyendo el B+tree.
-  Regla para dimensionar: 10M ≈ 1.8 GB · 50M ≈ 9 GB · **100M ≈ 18 GB** ·
-  500M ≈ 90 GB.
+- Tamaño en disco: 180 MB → **≈180 B por jugada** incluyendo el B+tree. La
+  constante baja con la escala (el B+tree se amortiza): a 100M son ≈163 B/jugada.
+  Medido: 1M = 180 MB · 10M = 1,6 GB · **100M = 15,5 GB** (validado 149/149) ·
+  estimado: 50M ≈ 8 GB · 500M ≈ 78 GB.
 - Auto-prueba de orden de claves big-endian: **APROBADA**.
 - Determinismo verificado: al regenerar con la misma semilla, el archivo
   salió byte a byte idéntico (188,260,352 B).

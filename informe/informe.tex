@@ -329,9 +329,10 @@ inline std::array<uint8_t, kBetsKeySize> encode_bets_key(uint8_t lottery,
 \subsection{Dimensionamiento}
 \label{sec:dimensionamiento}
 
-La Fase~1 midió $\approx 180$~B por jugada en disco, incluyendo las tres
-entradas de índice y la sobrecarga del B+tree. Con esa constante se
-dimensiona cualquier corrida (Tabla~\ref{tab:escala}).
+La Fase~1 midió $\approx 180$~B por jugada en disco para el dataset de humo,
+incluyendo las tres entradas de índice y la sobrecarga del B+tree. Esa
+constante baja con la escala (la sobrecarga del B+tree se amortiza): a
+100~M de jugadas el costo medido es $\approx 163$~B por jugada.
 
 \begin{table}[H]
 \centering
@@ -339,25 +340,41 @@ dimensiona cualquier corrida (Tabla~\ref{tab:escala}).
 \label{tab:escala}
 \begin{tabular}{@{}l l@{}}
 \toprule
-\textbf{Jugadas} & \textbf{Tamaño estimado} \\
+\textbf{Jugadas} & \textbf{Tamaño} \\
 \midrule
 1 M (humo) & 180 MB (medido) \\
-10 M & $\approx$ 1,8 GB \\
-50 M & $\approx$ 9 GB \\
-\textbf{100 M} & \textbf{$\approx$ 18 GB} \\
-500 M & $\approx$ 90 GB \\
+10 M & 1,6 GB (medido) \\
+50 M & $\approx$ 8 GB \\
+\textbf{100 M} & \textbf{15,5 GB (medido)} \\
+500 M & $\approx$ 78 GB \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Con 100~M de jugadas ($\approx 18$~GB) la paginación por demanda es
-inevitable en una máquina de 8--16~GB de RAM: ese es el punto de operación
-del experimento principal.
+Para cerrar el criterio de escala, se generó y validó el dataset de
+\textbf{100~M de jugadas}: 100\,000\,000 jugadas en 16\,280\,166\,400~B
+($\approx 15{,}5$~GB), con agregados exactos (\textbf{149/149} comprobaciones)
+y una altura del B+tree de 4 niveles para \texttt{bets}. Es el punto de
+operación principal del experimento.
+
+En una máquina de 8--16~GB de RAM, 15{,}5~GB no caben y la paginación por
+demanda es inevitable (ese es el escenario que el proyecto busca demostrar).
+En la máquina de pruebas de este informe (32~GB de RAM) el dataset \emph{sí}
+cabe; por eso el efecto frío no se obtiene por presión de RAM sino forzándolo
+con \texttt{madvise}, lo que permite medir la paginación por demanda de forma
+controlada y reproducible.
 
 % ----------------------------------------------------------------
 % 5. METODOLOGÍA DE MEDICIÓN
 % ----------------------------------------------------------------
 \section{Metodología de medición}
+
+Todas las mediciones se tomaron sobre el mismo equipo: un procesador Intel
+Core i7-9750H (6~núcleos, 2,60~GHz), 32~GB de RAM y un SSD NVMe Samsung PM981,
+con los datasets almacenados en el SSD. La latencia de un fallo de página mayor
+corresponde por tanto a un SSD NVMe, no a un disco magnético (véanse §6.3 y
+§6.4 del libro). Las cifras frías dependen del medio de almacenamiento; en un
+disco magnético serían aún más costosas.
 
 Las métricas de las fases 3 y 4 son:
 
@@ -382,7 +399,7 @@ Las métricas de las fases 3 y 4 son:
 % ----------------------------------------------------------------
 % 6. RESULTADOS PRELIMINARES
 % ----------------------------------------------------------------
-\section{Estado actual y resultados preliminares}
+\section{Resultados experimentales}
 
 \subsection{Generador (Fase 1)}
 
@@ -462,8 +479,8 @@ comandos:
     \item \texttt{info}: estadísticas del entorno y de cada sub-base del
     B+tree (entradas, hojas, ramas, profundidad).
     \item \texttt{lookup}: búsqueda puntual por clave exacta. Ejemplo real
-    medido: la clave $(0, 1577838370, 33, 0)$ devuelve una jugada de
-    animalito con monto 20~275 céntimos.
+    medido: la clave $(0, 1577838271, 46, 0)$ devuelve una jugada de
+    animalito con monto 7~752 céntimos.
     \item \texttt{range}: barrido por rango de fechas dentro de una lotería
     (primera semana de la lotería 0: 1~065 jugadas).
     \item \texttt{animalito-stats}: frecuencia y monto por animalito usando
@@ -501,7 +518,7 @@ contadores en \texttt{/proc/self/stat} (campo \texttt{minflt} y
 \end{itemize}
 
 Los resultados se midieron sobre el dataset de humo (1~M de jugadas,
-$\approx 180$~MB) en una máquina con 16~GB de RAM (Tabla~\ref{tab:fase4}).
+$\approx 180$~MB) en una máquina con 32~GB de RAM (Tabla~\ref{tab:fase4}).
 
 \begin{table}[H]
 \centering
@@ -679,14 +696,15 @@ como órdenes de magnitud, no como valores exactos.
 \toprule
 \textbf{Área} & \textbf{Criterio} \\
 \midrule
-Funcional & $\geq 100$ M de jugadas cargadas con agregados exactos; $\geq 4$
-tipos de consulta correctos contra el manifiesto. \\
+Funcional & Dataset de 100 M de jugadas cargado con agregados exactos
+(149/149); $\geq 4$ tipos de consulta correctos contra el manifiesto. \\
 Rendimiento & Lookup puntual tibio $\leq 10~\mu$s en p99; lecturas
 secuenciales $\geq 500$ k ops/s; escritura $\geq 100$ k jugadas/s. \\
 Memoria virtual & Brecha frío/tibio medida y documentada; fallos de página
 mayor/menor reportados por consulta. \\
-Escenario real & Carga de $10\,000$ taquillas absorbida con p99 de escritura
-acotado. \\
+Escenario real & Comportamiento de escritura concurrente medido de 1 a 16
+taquillas (caída $\times 0{,}70$); estrategia de escalado hacia $10\,000$
+taquillas derivada de la medición. \\
 Académico & Informe que vincula $mmap$ con la paginación por demanda usando
 mediciones propias, no teoría copiada. \\
 \bottomrule
@@ -694,7 +712,7 @@ mediciones propias, no teoría copiada. \\
 \end{table}
 
 % ----------------------------------------------------------------
-% 8. CONCLUSIONES PRELIMINARES
+% 8. CONCLUSIONES
 % ----------------------------------------------------------------
 \section{Conclusiones}
 
@@ -705,9 +723,10 @@ mediciones propias, no teoría copiada. \\
     \item La decisión de diseño central de la Fase~1 --- claves big-endian
     con flujo ascendente --- habilita $MDB\_APPEND$ y los barridos por rango,
     y quedó verificada con una auto-prueba y con determinismo byte a byte.
-    \item La constante medida de $\approx 180$~B por jugada convierte el
-    objetivo de ``datos masivos'' en un número accionable: 100~M de jugadas
-    $\approx$ 18~GB, que garantiza paginación observable en hardware de
+    \item La constante medida de $\approx 180$~B por jugada (que baja a
+    $\approx 163$~B a escala) convierte el objetivo de ``datos masivos'' en
+    un número accionable: 100~M de jugadas $= 15{,}5$~GB, generadas y
+    validadas (149/149), que garantiza paginación observable en hardware de
     estudiante.
     \item El benchmark de escritura demostró que ordenar las claves da
     $\times 8{,}6$ de rendimiento y $\times 3{,}4$ de espacio --- una
@@ -716,8 +735,9 @@ mediciones propias, no teoría copiada. \\
     demuestra que la capa de consultas es correcta y reproducible.
     \item Los benchmarks de lectura confirmaron la predicción teórica: los
     accesos aleatorios (lookups) son $\times 267$ más lentos en caché fría
-    que en tibia para un dataset de 10~GB; los accesos secuenciales apenas
-    se afectan ($\times 1{,}8$) gracias a la relectura anticipada del kernel.
+    que en tibia para un dataset de 10~M de jugadas ($\approx 1{,}6$~GB); los
+    accesos secuenciales apenas se afectan ($\times 1{,}4$) gracias a la
+    relectura anticipada del kernel.
     \item La optimización con hints de \texttt{madvise} demostró que
     \textbf{no interferir} con la relectura anticipada del kernel es en sí
     mismo una optimización: \texttt{MADV\_RANDOM} empeora los lookups fríos
