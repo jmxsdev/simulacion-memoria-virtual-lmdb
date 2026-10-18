@@ -369,11 +369,13 @@ y una altura del B+tree de 4 niveles para \texttt{bets}. Es el punto de
 operación principal del experimento.
 
 En una máquina de 8--16~GB de RAM, 15{,}5~GB no caben y la paginación por
-demanda es inevitable (ese es el escenario que el proyecto busca demostrar).
-En la máquina de pruebas de este informe (32~GB de RAM) el dataset \emph{sí}
-cabe; por eso el efecto frío no se obtiene por presión de RAM sino forzándolo
-con \texttt{madvise}, lo que permite medir la paginación por demanda de forma
-controlada y reproducible.
+demanda es inevitable. En la máquina de pruebas de este informe (32~GB de RAM)
+el dataset cabe en total, pero cuando se ejecuta con 11~GB ya ocupados el
+sistema debe expulsar páginas del caché para cargarlo: esa situación se midió
+en la Fase~5 (Tabla~\ref{tab:fase5_100m}) y constituye el escenario real que el
+proyecto busca reproducir. Además, el efecto frío se fuerza de forma controlada
+con \texttt{madvise}, lo que permite medir la paginación por demanda de manera
+reproducible.
 
 % ----------------------------------------------------------------
 % 5. METODOLOGÍA DE MEDICIÓN
@@ -675,6 +677,37 @@ Las cifras de \emph{fallos de página} son muy estables entre corridas
 del disco y del caché en el momento de la medición; por eso conviene leerlas
 como órdenes de magnitud, no como valores exactos.
 
+\paragraph{El dataset de 100~M de jugadas bajo presión de RAM.}
+Sobre el dataset de \textbf{100~M de jugadas} (15{,}5~GB) se repitió la
+medición con la máquina en un estado realista: 11~GB de RAM en uso y
+$\approx$19~GB disponibles, de modo que el dataset \emph{no} cabe en la RAM
+libre y el sistema debe liberar páginas del caché para cargarlo
+(Tabla~\ref{tab:fase5_100m}).
+
+\begin{table}[H]
+\centering
+\caption{Benchmarks de lectura sobre 100~M de jugadas (15{,}5~GB), con 11~GB de RAM en uso.}
+\label{tab:fase5_100m}
+\begin{tabular}{@{}l r r r r@{}}
+\toprule
+\textbf{Modo} & \textbf{Tibio ops/s} & \textbf{Frío ops/s} & \textbf{Factor} & \textbf{Frío majflt} \\
+\midrule
+read-lookup (200~k) & 661\,600 & 3\,050 & $\times$217 & 92\,373 \\
+read-scan (16,7~M) & 1\,670\,468 & 1\,456\,333 & $\times$1{,}15 & 744 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El comportamiento se acentúa: el lookup frío genera \textbf{92\,373 fallos de
+página mayores} (cada uno trae 4~KB desde el SSD) y es \textbf{$\times$217} más
+lento que el tibio. El barrido secuencial apenas cae ($\times$1{,}15), pero
+incluso en modo tibio registra $\approx$723 fallos mayores: es la evidencia de
+que, con 15{,}5~GB de datos y 11~GB ya ocupados, el sistema \emph{sí} está
+pagando por demanda durante un recorrido aparentemente secuencial. Este es el
+escenario real que el proyecto busca reproducir: cuando el dataset se acerca al
+tamaño de la RAM disponible, la frontera entre memoria y disco deja de ser
+teórica y aparece en cada consulta.
+
 % ----------------------------------------------------------------
 % 7. PLAN Y CRITERIOS DE ÉXITO
 % ----------------------------------------------------------------
@@ -748,7 +781,10 @@ mediciones propias, no teoría copiada. \\
     accesos aleatorios (lookups) son $\times 267$ más lentos en caché fría
     que en tibia para un dataset de 10~M de jugadas ($\approx 1{,}6$~GB); los
     accesos secuenciales apenas se afectan ($\times 1{,}4$) gracias a la
-    relectura anticipada del kernel.
+    relectura anticipada del kernel. Con 100~M de jugadas (15{,}5~GB) y 11~GB
+    de RAM ya ocupados, el efecto se acentúa: $\times 217$ en lookups y
+    92\,373 fallos de página mayores, e incluso el barrido tibio registra
+    $\approx$723 fallos mayores.
     \item La optimización con hints de \texttt{madvise} demostró que
     \textbf{no interferir} con la relectura anticipada del kernel es en sí
     mismo una optimización: \texttt{MADV\_RANDOM} empeora los lookups fríos
