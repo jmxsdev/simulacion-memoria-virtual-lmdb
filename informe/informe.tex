@@ -5,6 +5,7 @@
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{array}
+\usepackage{tabularx}
 \usepackage{longtable}
 \usepackage{caption}
 \usepackage{hyperref}
@@ -13,6 +14,10 @@
 \usepackage{listings}
 \usepackage{xcolor}
 \usepackage{float}
+
+% Permite estirar los espacios para evitar desbordamientos con cadenas
+% técnicas largas (rutas, nombres de funciones, etc.).
+\setlength{\emergencystretch}{3em}
 
 % Márgenes
 \geometry{top=2.5cm, bottom=2.5cm, left=3cm, right=3cm}
@@ -44,7 +49,12 @@
   numberstyle=\tiny\color{codegray},
   frame=single,
   breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=false,
   showstringspaces=false,
+  xleftmargin=0.6cm,
+  xrightmargin=0.1cm,
 }
 
 % Nombre del autor e institución (evita problemas con corchetes)
@@ -292,17 +302,18 @@ $MDB\_APPEND$.
 \centering
 \caption{Sub-bases del entorno LMDB.}
 \label{tab:subbases}
-\begin{tabular}{@{}llll@{}}
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}l X X X@{}}
 \toprule
 \textbf{Base} & \textbf{Propósito} & \textbf{Clave} & \textbf{Valor} \\
 \midrule
-\texttt{bets} & registro maestro (ascendente) & 13 B: lotería, ts, taquilla, seq & 16 B: tipo, selecciones, monto \\
+\texttt{bets} & registro maestro & 13 B: lotería, ts, taquilla, seq & 16 B: tipo, selecciones, monto \\
 \texttt{i\_animalito} & frecuencia y rachas & 16 B: lotería, animalito, ts, taquilla, seq & 8 B: monto \\
 \texttt{i\_terminal} & frecuencia de terminales & 16 B: lotería, terminal, ts, taquilla, seq & 8 B: monto \\
 \texttt{i\_taquilla} & replay por punto de venta & 16 B: taquilla, ts, lotería, seq & 8 B: monto \\
 \texttt{draws} & resultados de sorteos & 6 B: lotería, día, sorteo & 2 B: animalito, número \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 El Listado~\ref{lst:clave} muestra la codificación de la clave maestra; el
@@ -312,10 +323,8 @@ rango.
 \begin{lstlisting}[language=Cpp17, caption={Codificación de la clave maestra (src/keys.h).}, label={lst:clave}]
 // La clave arranca por loteria y sigue con la marca big-endian: el orden
 // lexicografico de los bytes coincide con el orden numerico.
-inline std::array<uint8_t, kBetsKeySize> encode_bets_key(uint8_t lottery,
-                                                        uint64_t ts,
-                                                        uint16_t taquilla,
-                                                        uint16_t seq) {
+inline std::array<uint8_t, kBetsKeySize> encode_bets_key(
+    uint8_t lottery, uint64_t ts, uint16_t taquilla, uint16_t seq) {
   std::array<uint8_t, kBetsKeySize> k{};
   size_t o = 0;
   k[o++] = lottery;
