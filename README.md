@@ -66,48 +66,125 @@ make smoke-clean  # borra solo los artefactos de la prueba de humo
 make clean      # borra solo los binarios — jamás los datasets
 ```
 
-## Herramientas
+## Herramientas y comandos
 
 | Herramienta | Fase | Qué hace |
 | --- | --- | --- |
-| `bin/generator` | 1 | genera el dataset determinista (`--bets`, `--years`, `--taquillas`, `--seed`...) |
-| `bin/bench` | 2, 4, 5 | benchmarks de escritura, lectura y escritura concurrente |
-| `bin/query` | 3 | consultas de solo lectura y validación contra el manifiesto |
+| `bin/generator` | 1 | Genera el dataset determinista (5 sub-bases + manifiesto). |
+| `bin/query` | 3 | Consultas de solo lectura y validación contra el manifiesto. |
+| `bin/bench` | 2, 4, 5 | Benchmarks de escritura, lectura y concurrencia. |
 
-Ejemplos:
+### `bin/generator` — crea el dataset
+
+Produce un dataset nuevo con las cinco sub-bases, los sorteos y el manifiesto
+de verdad absoluta. Es determinista: misma semilla ⇒ mismo archivo byte a byte.
 
 ```sh
-# Benchmark de escritura: 1M registros, lotes de 50k
-./bin/bench write-append --records 1000000 --batch 50000 --out data/bench_append.lmdb
-./bin/bench write-random  --records 1000000 --batch 50000 --out data/bench_random.lmdb
+./bin/generator --bets 1000000 --out data/smoke.lmdb
+```
 
-# Consultas sobre el dataset generado
+| Flag | Qué hace |
+| --- | --- |
+| `--bets N` | Total de jugadas (default 1 000 000) |
+| `--years Y` | Años de historia (default 3) |
+| `--taquillas T` | Puntos de venta (default 50) |
+| `--seed S` | Semilla del PRNG (default 42) |
+| `--out PATH` | Archivo LMDB de salida |
+| `--map-gb G` | Tope del mapa en GiB (default 8; usar 24 para 100M) |
+| `--batch-txn M` | Jugadas por transacción (default 50 000) |
+
+### `bin/query` — consulta el dataset real
+
+Todas requieren `--db RUTA` y leen el dataset que generó `bin/generator`.
+
+| Comando | Qué hace | Qué imprime |
+| --- | --- | --- |
+| `info` | Estadísticas del entorno y del B+tree de cada sub-base | map size, últ. página, entradas, hojas, ramas, profundidad, tamaño |
+| `lookup --lottery L --ts T --taquilla Q --seq S` | **Búsqueda puntual** de una jugada por clave exacta en `bets` | tipo, selecciones y monto (o `NO ENCONTRADA`) |
+| `range --lottery L --from A --to B` | **Barrido por rango** de fechas en una lotería | jugadas y monto total del rango |
+| `animalito-stats --lottery L [--animal N]` | Frecuencia y monto por animalito usando `i_animalito` | una línea por animalito + total |
+| `terminal-stats --lottery L` | Frecuencia y monto por terminal usando `i_terminal` | una línea por terminal + total |
+| `racha --lottery L --animal N` | Días que lleva un animalito sin salir en los sorteos | apariciones, último día y días sin salir |
+| `taquilla --taquilla Q` | Replay de un punto de venta usando `i_taquilla` | jugadas y monto total |
+| `validate [--manifest RUTA]` | Compara los agregados del B+tree contra el manifiesto | `149/149` comprobaciones |
+
+```sh
 ./bin/query --db data/smoke.lmdb info
 ./bin/query --db data/smoke.lmdb lookup --lottery 0 --ts 1577838271 --taquilla 46 --seq 0
 ./bin/query --db data/smoke.lmdb range --lottery 0 --from 1577836800 --to 1578441600
 ./bin/query --db data/smoke.lmdb animalito-stats --lottery 0
 ./bin/query --db data/smoke.lmdb racha --lottery 0 --animal 5
 ./bin/query --db data/smoke.lmdb taquilla --taquilla 7
-./bin/query --db data/smoke.lmdb validate   # 149 comprobaciones contra el manifiesto
+./bin/query --db data/smoke.lmdb validate
+```
 
-# Benchmark de lectura: lookups puntuales (tibio y frío)
+### `bin/bench` — mide rendimiento
+
+#### Escritura (datos sintéticos, no usa el dataset de apuestas)
+
+| Comando | Qué hace |
+| --- | --- |
+| `write-append` | Escribe N registros con claves **ascendentes** y `MDB_APPEND` (camino rápido del B+tree). |
+| `write-random` | Escribe N registros con claves **aleatorias** y `mdb_put` normal (camino lento). |
+
+```sh
+./bin/bench write-append --records 1000000 --batch 50000 --out data/bench_append.lmdb
+./bin/bench write-random  --records 1000000 --batch 50000 --out data/bench_random.lmdb
+```
+
+Miden registros/s, MB/s y latencia de commit p50/p95/p99. Cada uno crea un
+archivo **nuevo y desechable** (base `k`, 8 B de clave + 96 B de valor).
+
+#### Lectura (sobre el dataset real)
+
+| Comando | Qué hace | Flags |
+| --- | --- | --- |
+| `read-lookup` | N **búsquedas puntuales** aleatorias sobre claves existentes | `--n`, `--cold` |
+| `read-scan` | **Barrido secuencial** de todas las jugadas de una lotería | `--lottery`, `--cold` |
+| `read-index` | **Barrido secuencial** del índice `i_animalito` completo | `--cold` |
+
+```sh
 ./bin/bench read-lookup --db data/smoke.lmdb --n 200000          # tibio
 ./bin/bench read-lookup --db data/smoke.lmdb --n 200000 --cold   # frío
-
-# Benchmark de lectura: barrido secuencial por lotería
 ./bin/bench read-scan --db data/smoke.lmdb --lottery 0           # tibio
 ./bin/bench read-scan --db data/smoke.lmdb --lottery 0 --cold    # frío
-
-# Benchmark de lectura: barrido del índice i_animalito
 ./bin/bench read-index --db data/smoke.lmdb                      # tibio
 ./bin/bench read-index --db data/smoke.lmdb --cold               # frío
+```
 
-# Benchmark de escritura concurrente: simula N taquillas
-./bin/bench write-concurrent --taquillas 1 --records 500000 --out data/bench_1t.lmdb --force
-./bin/bench write-concurrent --taquillas 4 --records 500000 --out data/bench_4t.lmdb --force
-./bin/bench write-concurrent --taquillas 8 --records 500000 --out data/bench_8t.lmdb --force
+`--cold` libera el caché de páginas antes de medir con
+`madvise(MADV_DONTNEED)` (sin root) y reporta los fallos de página mayor/menor
+medidos con `/proc/self/stat`.
+
+#### Escritura concurrente (simula N taquillas)
+
+| Comando | Qué hace |
+| --- | --- |
+| `write-concurrent --taquillas N` | Lanza **N hilos** (taquillas) escribiendo en paralelo; serializa con un mutex porque LMDB admite un solo escritor. |
+
+```sh
+./bin/bench write-concurrent --taquillas 1  --records 500000 --out data/bench_1t.lmdb  --force
+./bin/bench write-concurrent --taquillas 4  --records 500000 --out data/bench_4t.lmdb  --force
+./bin/bench write-concurrent --taquillas 8  --records 500000 --out data/bench_8t.lmdb  --force
 ./bin/bench write-concurrent --taquillas 16 --records 500000 --out data/bench_16t.lmdb --force
 ```
+
+`--records` es **por taquilla** (con 8 taquillas y 500 000 escribe 4 000 000 en
+total). Reporta throughput global, commit p50/p95 y el desglose por taquilla.
+
+### Flags comunes
+
+| Flag | Significado |
+| --- | --- |
+| `--db RUTA` | Dataset a leer (`query` y benchmarks de lectura) |
+| `--out RUTA` | Archivo LMDB de salida (benchmarks de escritura) |
+| `--records N` | Registros (total en escritura simple; **por taquilla** en concurrente) |
+| `--batch M` | Registros por transacción (commit cada lote) |
+| `--n N` | Cantidad de lookups |
+| `--taquillas N` | Número de hilos/taquillas |
+| `--lottery L` | Lotería (0–5) |
+| `--cold` | Liberar el caché antes de medir |
+| `--force` | Sobrescribir la salida si existe |
 
 ### Resultados medidos (Fase 2)
 
